@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  用户信用概览 —— 数据源是 v_user_credit_summary 视图。
+
+  视图里已经算好了履约率、资源完好率、评价均分这三个比率。
+  这跟 v_resource_list 的做法一样:凡是"对所有调用方口径都一致"的
+  计算,内聚进视图比让每个 Service 各算一遍可靠得多 ——
+  三个页面各写一遍 4 表 JOIN + CASE WHEN,口径改了必然漏改一处。
+-->
+<mapper namespace="com.gjf.village.mapper.UserCreditSummaryMapper">
+
+    <select id="selectByUserId" resultType="com.gjf.village.entity.UserCreditSummary">
+        SELECT * FROM v_user_credit_summary WHERE user_id = #{userId}
+    </select>
+
+    <!-- ================================================================
+         信用列表(后台)
+
+         排序用 credit_score ASC 而不是 DESC:这是管理页面不是排行榜,
+         管理员打开它要办的事是"看看谁快跌破门槛了",
+         分数最低的排在最前面才有用。
+         ================================================================ -->
+    <select id="selectCreditPage" resultType="com.gjf.village.entity.UserCreditSummary">
+        SELECT * FROM v_user_credit_summary
+        <where>
+            <if test="q.keyword != null and q.keyword != ''">
+                AND (real_name LIKE CONCAT('%', #{q.keyword}, '%')
+                     OR phone LIKE CONCAT('%', #{q.keyword}, '%'))
+            </if>
+            <if test="q.maxScore != null">
+                AND credit_score &lt;= #{q.maxScore}
+            </if>
+            <if test="q.minScore != null">
+                AND credit_score &gt;= #{q.minScore}
+            </if>
+            <!-- 数据级权限:村级管理员只看本村用户 -->
+            <if test="q.villageIds != null and q.villageIds.size() > 0">
+                AND village_id IN
+                <foreach collection="q.villageIds" item="vid" open="(" separator="," close=")">
+                    #{vid}
+                </foreach>
+            </if>
+        </where>
+        ORDER BY credit_score ASC, user_id ASC
+    </select>
+
+</mapper>

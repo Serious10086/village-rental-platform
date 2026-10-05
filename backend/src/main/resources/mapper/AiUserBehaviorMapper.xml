@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  用户行为查询(推荐算法的两条主查询)。
+-->
+<mapper namespace="com.gjf.village.mapper.AiUserBehaviorMapper">
+
+    <!-- ================================================================
+         这个用户偏好哪些分类
+
+         权重表(每个数字都有理由):
+           下单 5 —— 最强意图。掏过钱的行为,比什么都说明问题
+           评价 4 —— 评价意味着这笔交易完成了,和下单同级的确定性
+           收藏 3 —— 明确"想留着",比看两眼强得多
+           搜索 2 —— 主动去找过某个词,意图明确但不如收藏具体
+           浏览 1 —— 最弱的信号。可能是误点、可能是划过去
+                    停留 >= 30 秒再加 1 分:停那么久说明真在看。
+
+         上限刻意压得低(浏览最多 2 分):让"三次认真浏览"顶得上
+         "一次收藏",但顶不上"一次下单"。如果浏览权重再高一点,
+         一个人随手刷十几条就能把偏好刷歪。
+
+         category_id IS NOT NULL 这个条件不能省 —— 搜索行为
+         (关键词搜索)的分类是空的,不排掉会给出一堆 NULL 分组。
+         ================================================================ -->
+    <select id="selectTopCategories" resultType="com.gjf.village.vo.CategoryPreferenceVO">
+        SELECT
+            b.category_id AS category_id,
+            c.category_name AS category_name,
+            SUM(
+                CASE b.behavior_type
+                    WHEN 4 THEN 5
+                    WHEN 5 THEN 4
+                    WHEN 3 THEN 3
+                    WHEN 2 THEN 2
+                    ELSE 1 + IF(b.stay_seconds &gt;= 30, 1, 0)
+                END
+            ) AS score,
+            COUNT(*) AS behavior_count
+        FROM ai_user_behavior b
+        LEFT JOIN biz_resource_category c ON c.id = b.category_id
+        WHERE b.user_id = #{userId}
+          AND b.category_id IS NOT NULL
+          AND b.create_time &gt;= DATE_SUB(NOW(), INTERVAL #{days} DAY)
+        GROUP BY b.category_id, c.category_name
+        ORDER BY score DESC, behavior_count DESC, b.category_id ASC
+        LIMIT #{limit}
+    </select>
+
+    <!--
+      推荐位点击率总览。
+
+      【两个 source = 4 的条件】
+      浏览和曝光都要求 source = 4(推荐位),这是"只统计推荐位"的唯一依据。
+      漏掉它的话,分母会变成"全站曝光"、分子变成"全站浏览",
+      算出来的率看着正常但完全没有意义 —— 而且很难发现,因为它是个合理的数。
+
+      【total_views 不带 source 条件】
+      它要的正是"全站浏览",用来算推荐位占了多大分量。
+      同一个查询里两个口径并存,所以每一处的条件都写得很显式。
+
+      【三个率都在 SQL 里算】
+      取回 Java 再除的话,一旦有人改了取数范围而忘了改计算,
+      就会出现"3 除以 10 显示成 40%"这种没人能一眼看出来的错。
+      写在 SQL 里,百分比和它旁边那两个计数天然自洽。
+    -->
+    <select id="selectRecommendStat" resultType="com.gjf.village.vo.RecommendStatVO">
+        SELECT
+            COUNT(CASE WHEN b.behavior_type = 6 AND b.source = 4 THEN 1 END) AS impressions,
+            COUNT(CASE WHEN b.behavior_type = 1 AND b.source = 4 THEN 1 END) AS clicks,
+            COUNT(CASE WHEN b.behavior_type = 1 THEN 1 END)                   AS total_views,
+            CASE WHEN COUNT(CASE WHEN b.behavior_type = 6 AND b.source = 4 THEN 1 END) = 0
+                 THEN 0
+                 ELSE ROUND(100 * COUNT(CASE WHEN b.behavior_type = 1 AND b.source = 4 THEN 1 END)
+                            / COUNT(CASE WHEN b.behavior_type = 6 AND b.source = 4 THEN 1 END), 1)
+            END AS ctr,
+            CASE WHEN COUNT(CASE WHEN b.behavior_type = 1 THEN 1 END) = 0
+                 THEN 0
+                 ELSE ROUND(100 * COUNT(CASE WHEN b.behavior_type = 1 AND b.source = 4 THEN 1 END)
+                            / COUNT(CASE WHEN b.behavior_type = 1 THEN 1 END), 1)
+            END AS click_share
+        FROM ai_user_behavior b
+        WHERE b.create_time &gt;= DATE_SUB(NOW(), INTERVAL #{days} DAY)
+        <if test="villageIds != null">
+            AND b.village_id IN
+            <foreach collection="villageIds" item="vid" open="(" separator="," close=")">
+                #{vid}
+            </foreach>
+        </if>
+    </select>
+
+    <select id="selectRecommendDaily" resultType="com.gjf.village.vo.RecommendDailyVO">
+        SELECT
+            DATE_FORMAT(b.create_time, '%Y-%m-%d')                            AS date,
+            COUNT(CASE WHEN b.behavior_type = 6 AND b.source = 4 THEN 1 END)  AS impressions,
+            COUNT(CASE WHEN b.behavior_type = 1 AND b.source = 4 THEN 1 END)  AS clicks,
+            CASE WHEN COUNT(CASE WHEN b.behavior_type = 6 AND b.source = 4 THEN 1 END) = 0
+                 THEN 0
+                 ELSE ROUND(100 * COUNT(CASE WHEN b.behavior_type = 1 AND b.source = 4 THEN 1 END)
+                            / COUNT(CASE WHEN b.behavior_type = 6 AND b.source = 4 THEN 1 END), 1)
+            END AS ctr
+        FROM ai_user_behavior b
+        WHERE b.create_time &gt;= DATE_SUB(NOW(), INTERVAL #{days} DAY)
+        <if test="villageIds != null">
+            AND b.village_id IN
+            <foreach collection="villageIds" item="vid" open="(" separator="," close=")">
+                #{vid}
+            </foreach>
+        </if>
+        GROUP BY DATE_FORMAT(b.create_time, '%Y-%m-%d')
+        ORDER BY date ASC
+    </select>
+
+    <!--
+      各类行为的采集量。
+
+      这一个查询没有 CASE WHEN 的"曝光/点击"口径 —— 它就是按类型分组数数,
+      简单到几乎不用解释。它的价值不在 SQL,在于**有一个地方能看见
+      行为有没有被记下来**:推荐变笨通常不报错,而采集量掉到 0 看得见。
+    -->
+    <select id="selectBehaviorCounts" resultType="com.gjf.village.vo.BehaviorCountVO">
+        SELECT
+            b.behavior_type AS type,
+            COUNT(*)        AS count
+        FROM ai_user_behavior b
+        WHERE b.create_time &gt;= DATE_SUB(NOW(), INTERVAL #{days} DAY)
+        <if test="villageIds != null">
+            AND b.village_id IN
+            <foreach collection="villageIds" item="vid" open="(" separator="," close=")">
+                #{vid}
+            </foreach>
+        </if>
+        GROUP BY b.behavior_type
+        ORDER BY b.behavior_type ASC
+    </select>
+
+</mapper>

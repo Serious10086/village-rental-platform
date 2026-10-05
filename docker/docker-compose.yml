@@ -1,0 +1,149 @@
+# ============================================================================
+#  乡村闲置资源租售平台 —— 一键部署
+#
+#  在干净环境上跑起来只需要三步:
+#      cd docker
+#      cp .env.example .env       # 填数据库密码和 DeepSeek 密钥
+#      docker compose up -d --build
+#  然后浏览器打开 http://localhost:8088
+#
+#  【三个容器各自负责什么】
+#      mysql     数据库(启动时自动建库建表灌演示数据)
+#      backend   Spring Boot 接口服务,不对宿主机暴露端口
+#      frontend  Nginx:托管前端页面,并把 /api、/upload 转发给 backend
+#
+#  【只有 frontend 暴露端口,这是刻意的】
+#  浏览器只需要访问一个地址(同源),跨域问题从结构上就不存在。
+#  后端不暴露端口意味着它不可能被绕过 Nginx 直接访问 —— 防火墙层面的
+#  收紧比在代码里判断来源可靠。
+# ============================================================================
+
+name: village-rental
+
+services:
+
+  # ── 数据库 ────────────────────────────────────────────────
+  mysql:
+    image: mysql:8.0
+    container_name: village-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-village_rental}
+      TZ: Asia/Shanghai
+    command:
+      # 服务端默认字符集。不设的话 MySQL 8 默认是 utf8mb4 没错,
+      # 但排序规则会是 utf8mb4_0900_ai_ci —— 而建表脚本里用的是
+      # utf8mb4_unicode_ci,两边不一致时 JOIN 字符串列会报
+      # "Illegal mix of collations"。
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+    volumes:
+      - mysql-data:/var/lib/mysql
+      # 【首次启动自动初始化】
+      # MySQL 官方镜像的约定:数据目录为空时,按文件名顺序执行
+      # /docker-entrypoint-initdb.d 下的 .sql / .sh。
+      # 我们的文件名前缀 01~05 正好就是要的顺序(建表→建表→视图→种子→演示数据)。
+      #
+      # 注意它**只在数据目录为空时执行一次**。之后改 SQL 文件不会重跑 ——
+      # 想重新初始化得 docker compose down -v(连同数据卷一起删)。
+      - ../sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # 用 mysqladmin ping 而不是 TCP 探测:端口通了不等于数据库能连
+      # (初始化脚本还在跑的时候端口就已经开着)。healthcheck 要的是
+      # "现在可以接受连接了",所以必须真的问数据库一句。
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      # 首次启动要执行 5 个 SQL 脚本(其中演示数据那个有几百条 INSERT),
+      # 给足预热时间,否则会被判定为启动失败
+      start_period: 60s
+    networks:
+      - village-net
+
+  # ── 后端接口 ──────────────────────────────────────────────
+  backend:
+    build:
+      # 上下文是仓库根目录:构建要用到 backend/ 源码和 docker/ 下的配置
+      context: ..
+      dockerfile: docker/backend.Dockerfile
+    image: village-backend:1.0.0
+    container_name: village-backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        # 等到数据库真的能连了再启动。只写 service_started 的话,
+        # Spring Boot 会在 MySQL 还在跑初始化脚本时就尝试连库,
+        # 连接池重试几次失败后直接退出容器 —— 表现为"第一次 up 必失败,
+        # 再 up 一次就好了",很难归因。
+        condition: service_healthy
+    environment:
+      TZ: Asia/Shanghai
+
+      # 【配置全部走环境变量,不改代码、不进镜像】
+      # 镜像里那一份 application-dev.yml 已经在 Dockerfile 里删掉了
+      # (它含本机密码和真实密钥)。Spring Boot 的加载顺序里
+      # **操作系统环境变量优先于 application.yml**,所以这里给的值会生效。
+      #
+      # 属性名到环境变量的换算规则:点换下划线、横杠换下划线、全大写。
+      #   spring.datasource.url  →  SPRING_DATASOURCE_URL
+      #   app.upload.path        →  APP_UPLOAD_PATH
+      SPRING_DATASOURCE_URL: >-
+        jdbc:mysql://mysql:3306/${MYSQL_DATABASE:-village_rental}?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: ${DB_ROOT_PASSWORD:-root}
+
+      # 上传目录改成容器内路径。不覆盖的话会去写 D:/bishe/claude/upload ——
+      # Linux 容器里没有 D 盘,上传直接报错。
+      APP_UPLOAD_PATH: /app/upload
+
+      # JWT 签名密钥。镜像里没有 application-dev.yml(它含本机密钥,Dockerfile
+      # 里删掉了),而 application.yml 写的是 ${JWT_SECRET:} —— 不在这里注入的话
+      # 密钥就是空字符串,HS256 会在启动时抛 WeakKeyException,容器起不来。
+      #
+      # 刻意不给默认值:给默认值等于又把密钥写回代码,正是要避免的事。
+      # 缺了它就让 compose 直接报错退出,比启动后才发现好。
+      APP_JWT_SECRET: ${JWT_SECRET:?请在 docker/.env 里设置 JWT_SECRET(至少 32 字节)}
+
+      # 密钥。application.yml 里写的就是 ${DEEPSEEK_API_KEY:},留空则走降级,
+      # 平台其他功能不受影响(详见 application.yml 那段注释)。
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+    volumes:
+      # 用户上传的图片必须落在卷上:容器重建时 /app/upload 会被清空,
+      # 而数据库里那些 /upload/xxx.jpg 的引用还在,页面就全是裂图。
+      - upload-data:/app/upload
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/api/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      # Spring Boot 冷启动 + 建连接池大约 20~30 秒
+      start_period: 40s
+    networks:
+      - village-net
+
+  # ── 前端 + 反向代理 ───────────────────────────────────────
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/frontend.Dockerfile
+    image: village-frontend:1.0.0
+    container_name: village-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8088}:80"
+    networks:
+      - village-net
+
+volumes:
+  mysql-data:
+  upload-data:
+
+networks:
+  village-net:
+    driver: bridge

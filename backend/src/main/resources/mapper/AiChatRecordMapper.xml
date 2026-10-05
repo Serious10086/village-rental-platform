@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  AI 对话记录查询。
+
+  【为什么这里到处都在用 <sql id="scope"> 而不是直接写条件】
+  四个查询都要按村组白名单过滤,而白名单只有一处来源
+  (DataScopeHelper 注入的 q.villageIds,超管时为 null = 不加限制)。
+  把这段抽出来,是为了避免"三个地方写对了、第四个忘了写" ——
+  忘掉的那个就是越权读别村对话记录的入口。
+-->
+<mapper namespace="com.gjf.village.mapper.AiChatRecordMapper">
+
+    <!-- 村组白名单。超管(q.villageIds 为 null)时整段不生效 -->
+    <sql id="scope">
+        <if test="q.villageIds != null">
+            AND a.village_id IN
+            <foreach collection="q.villageIds" item="vid" open="(" separator="," close=")">
+                #{vid}
+            </foreach>
+        </if>
+    </sql>
+
+    <!--
+      多轮上下文:倒序取 limit 条。
+
+      【必须带 user_id 这个条件,不能只按 session_id 查】
+      session_id 是**前端生成的**,也就是说它可以被编造、被改成别人的。
+      只按 session_id 取上下文的话,把自己的 sessionId 改成别人的,
+      下一句提问就会带着别人的历史一起发给模型 —— 模型的回答里很可能
+      顺着上下文把对方的提问复述出来,那就是一次实打实的信息泄露。
+      会话归属这个人,取历史就必须连归属一起验。
+
+      只取 status = 1(真正由 AI 回答的)那部分。
+      降级话术是一个固定的 FAQ 段落,把它当成"助手说过的话"塞进上下文,
+      模型会以为那是自己的输出,于是可能顺着它继续编;
+      而被拦截的那条连内容都没有,更不该进去。
+      上下文里只放真实的问答对,历史才是干净的。
+    -->
+    <select id="selectRecentBySession" resultType="com.gjf.village.entity.AiChatRecord">
+        SELECT * FROM ai_chat_record
+        WHERE session_id = #{sessionId}
+          AND user_id = #{userId}
+          AND status = 1
+        ORDER BY create_time DESC, id DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectAdminPage" resultType="com.gjf.village.vo.AiChatRecordVO">
+        SELECT
+            a.id, a.session_id, a.user_id, a.village_id,
+            a.question, a.answer, a.model,
+            a.prompt_tokens, a.completion_tokens, a.cost_time,
+            a.status, a.degrade_reason, a.is_resolved, a.is_transfer,
+            a.create_time,
+            COALESCE(u.real_name,
+                     CONCAT(LEFT(u.phone, 3), '****', RIGHT(u.phone, 4))) AS user_name,
+            v.village_name
+        FROM ai_chat_record a
+        JOIN sys_user    u ON u.id = a.user_id
+        LEFT JOIN sys_village v ON v.id = a.village_id
+        WHERE 1 = 1
+        <include refid="scope"/>
+        <if test="q.status != null">
+            AND a.status = #{q.status}
+        </if>
+        <!-- onlyProblem 是给排查用的快捷筛选:一次把降级和失败都捞出来 -->
+        <if test="q.onlyProblem != null and q.onlyProblem">
+            AND a.status IN (2, 3)
+        </if>
+        <if test="q.keyword != null and q.keyword != ''">
+            AND a.question LIKE CONCAT('%', #{q.keyword}, '%')
+        </if>
+        ORDER BY a.create_time DESC, a.id DESC
+    </select>
+
+    <!--
+      统计总览。
+
+      COUNT(CASE WHEN ... END) 而不是 SUM(status = 1):
+      后者在 MySQL 里返回 DECIMAL,映射到 Java 的 long 要靠隐式转换,
+      而 COUNT 明确返回 BIGINT。少一次"类型对不对"的担心。
+
+      没有记录时 COUNT 给 0、MAX 给 NULL —— 所以 MAX 外面套了 COALESCE,
+      否则 VO 里的 maxCostMs 会是 null,前端算百分比时就要多一个判空分支。
+    -->
+    <select id="selectStat" resultType="com.gjf.village.vo.AiDegradeStatVO">
+        SELECT
+            COUNT(*)                                          AS total,
+            COUNT(CASE WHEN a.status = 1 THEN 1 END)          AS success_count,
+            COUNT(CASE WHEN a.status = 2 THEN 1 END)          AS degraded_count,
+            COUNT(CASE WHEN a.status = 3 THEN 1 END)          AS failed_count,
+            CASE WHEN COUNT(*) = 0 THEN 0
+                 ELSE ROUND(100 * COUNT(CASE WHEN a.status = 2 THEN 1 END) / COUNT(*), 1)
+            END                                               AS degrade_rate,
+            <!-- 平均耗时只统计成功的:降级那条记的可能是兜底话术的耗时,
+                 把它混进来会让"AI 有多快"这个数字偏乐观 -->
+            COALESCE(ROUND(AVG(CASE WHEN a.status = 1 THEN a.cost_time END)), 0) AS avg_cost_ms,
+            COALESCE(MAX(a.cost_time), 0)                     AS max_cost_ms,
+            COALESCE(SUM(a.prompt_tokens + a.completion_tokens), 0) AS total_tokens
+        FROM ai_chat_record a
+        WHERE 1 = 1
+        <include refid="scope"/>
+    </select>
+
+    <select id="selectReasonDistribution"
+            resultType="com.gjf.village.vo.AiDegradeReasonVO">
+        SELECT
+            a.degrade_reason AS reason,
+            COUNT(*)         AS count
+        FROM ai_chat_record a
+        WHERE a.degrade_reason IS NOT NULL
+        <include refid="scope"/>
+        GROUP BY a.degrade_reason
+        ORDER BY count DESC, reason ASC
+    </select>
+
+</mapper>

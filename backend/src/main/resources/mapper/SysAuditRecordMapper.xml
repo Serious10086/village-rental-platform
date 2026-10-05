@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  通用审核流水的查询。
+
+  这张表的设计是「一个审核底座,四条业务流共用」(实名认证 / 资源发布 /
+  外来用户备案 / 提现),靠 biz_type + biz_id 区分。
+
+  代价是 biz_id 是多态关联,建不了物理外键,SQL 里只能用
+  「LEFT JOIN ... ON a.biz_type = 2 AND r.id = a.biz_id」这种条件连接。
+  这是刻意的取舍 —— 四条流的字段完全同构,拆成四张表会有大量重复,
+  而审核相关的查询几乎都是「按类型筛选 + 按村组过滤」,并不依赖外键约束。
+-->
+<mapper namespace="com.gjf.village.mapper.SysAuditRecordMapper">
+
+    <!--
+      审核列表公共字段。
+
+      资源相关的几列全部来自 LEFT JOIN biz_resource,只有 biz_type = 2 时才有值;
+      实名相关的列来自 sys_user,其余类型下为空。
+      用 LEFT JOIN 而不是 INNER JOIN:待审核的实名记录还没有对应的资源,
+      用 INNER JOIN 会让实名待办整批消失。
+    -->
+    <sql id="auditColumns">
+        a.id,
+        a.biz_type,
+        a.biz_id,
+        a.applicant_id,
+        a.village_id,
+        a.audit_status,
+        a.audit_remark,
+        a.submit_time,
+        a.audit_time,
+        u.real_name       AS applicant_name,
+        u.phone           AS applicant_phone,
+        u.credit_score    AS applicant_credit,
+        u.realname_status AS realname_status,
+        v.village_name    AS applicant_village_name,
+        <!--
+          身份证号在列表里脱敏:保留前 6 位(地区码)和后 4 位,中间打码。
+          管理员核对身份需要完整号码时点进详情页 —— detail 接口返回完整值。
+          列表页没必要展示完整号码,而脱敏能避免截图外传这类意外泄露。
+        -->
+        CONCAT(LEFT(u.id_card, 6), '********', RIGHT(u.id_card, 4)) AS id_card,
+        u.id_card_front,
+        u.id_card_back,
+        r.resource_name,
+        r.cover_url       AS resource_cover,
+        r.description     AS resource_description,
+        r.price,
+        r.price_unit,
+        r.trade_type,
+        r.risk_level,
+        r.resource_status,
+        c.category_name,
+        au.real_name      AS auditor_name
+    </sql>
+
+    <sql id="auditJoins">
+        FROM sys_audit_record a
+        LEFT JOIN sys_user     u  ON u.id = a.applicant_id
+        LEFT JOIN sys_village  v  ON v.id = a.village_id
+        LEFT JOIN sys_user     au ON au.id = a.auditor_id
+        <!-- 只有资源类审核(biz_type = 2)才关联资源表 -->
+        LEFT JOIN biz_resource r  ON a.biz_type = 2 AND r.id = a.biz_id
+        LEFT JOIN biz_resource_category c ON c.id = r.category_id
+    </sql>
+
+    <!-- 供审核列表与待办统计复用 -->
+    <sql id="auditWhere">
+        <if test="q.bizType != null">
+            AND a.biz_type = #{q.bizType}
+        </if>
+        <if test="q.auditStatus != null">
+            AND a.audit_status = #{q.auditStatus}
+        </if>
+        <!--
+          数据级权限:村级管理员只能看本村的审核单。
+          这里不是简单的 a.village_id = #{villageId} 而是 IN 集合,
+          因为数据范围里的「本镇」要覆盖多个村,用集合一种类型就能覆盖全部情况。
+          集合为空表示不限(超管)。
+        -->
+        <if test="q.villageIds != null and q.villageIds.size() > 0">
+            AND a.village_id IN
+            <foreach collection="q.villageIds" item="vid" open="(" separator="," close=")">
+                #{vid}
+            </foreach>
+        </if>
+        <if test="q.keyword != null and q.keyword != ''">
+            AND (u.real_name LIKE CONCAT('%', #{q.keyword}, '%')
+                 OR u.phone LIKE CONCAT('%', #{q.keyword}, '%')
+                 OR r.resource_name LIKE CONCAT('%', #{q.keyword}, '%'))
+        </if>
+    </sql>
+
+    <!-- ============ 审核列表 ============ -->
+    <select id="selectAuditPage" resultType="com.gjf.village.vo.AuditRecordVO">
+        SELECT
+        <include refid="auditColumns"/>
+        <include refid="auditJoins"/>
+        <where>
+            <include refid="auditWhere"/>
+        </where>
+        <!-- 待审核的排前面,同状态按提交时间正序(先来先审) -->
+        ORDER BY a.audit_status ASC, a.submit_time ASC
+    </select>
+
+    <!-- ============ 审核详情(含完整身份证号) ============ -->
+    <select id="selectAuditDetail" resultType="com.gjf.village.vo.AuditRecordVO">
+        SELECT
+        a.id,
+        a.biz_type,
+        a.biz_id,
+        a.applicant_id,
+        a.village_id,
+        a.audit_status,
+        a.audit_remark,
+        a.submit_time,
+        a.audit_time,
+        u.real_name       AS applicant_name,
+        u.phone           AS applicant_phone,
+        u.credit_score    AS applicant_credit,
+        u.realname_status AS realname_status,
+        v.village_name    AS applicant_village_name,
+        <!-- 详情接口返回完整身份证号 —— 管理员核对身份需要看到全部 -->
+        u.id_card,
+        u.id_card_front,
+        u.id_card_back,
+        r.resource_name,
+        r.cover_url       AS resource_cover,
+        r.description     AS resource_description,
+        r.price,
+        r.price_unit,
+        r.trade_type,
+        r.risk_level,
+        r.resource_status,
+        c.category_name,
+        au.real_name      AS auditor_name
+        <include refid="auditJoins"/>
+        WHERE a.id = #{id}
+    </select>
+
+    <!-- ============ 待办统计 ============ -->
+    <select id="countPending" resultType="long">
+        SELECT COUNT(*)
+        FROM sys_audit_record a
+        <where>
+            a.audit_status = 0
+            <if test="villageIds != null and villageIds.size() > 0">
+                AND a.village_id IN
+                <foreach collection="villageIds" item="vid" open="(" separator="," close=")">
+                    #{vid}
+                </foreach>
+            </if>
+            <if test="bizType != null">
+                AND a.biz_type = #{bizType}
+            </if>
+        </where>
+    </select>
+
+</mapper>

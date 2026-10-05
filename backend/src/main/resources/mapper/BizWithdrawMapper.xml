@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  提现单查询。
+
+  【前后台共用一段列定义】
+  前台"我的提现记录"和后台"提现审核"是同一个 select,差别只在
+  查询条件(前台强制 user_id = 我,后台按 villageIds 过滤)。
+  共用一处的意义在于:收款账号这类字段只在前台露一次、后台露一次,
+  如果写成两个 select,将来加一个"打款凭证号"必然漏掉一边。
+
+  【为什么 JOIN sys_user 两次】
+  一次拿申请人,一次拿审核人。LEFT JOIN 审核人是因为待审核的单子
+  还没有审核人 —— 用 INNER JOIN 会让所有待审核的提现单从列表里消失,
+  而那恰恰是管理员最需要看到的一批。
+-->
+<mapper namespace="com.gjf.village.mapper.BizWithdrawMapper">
+
+    <sql id="withdrawColumns">
+        w.id,
+        w.withdraw_no,
+        w.user_id,
+        u.real_name       AS user_name,
+        u.phone           AS user_phone,
+        w.amount,
+        w.account_type,
+        w.account_no,
+        w.account_name,
+        w.status,
+        w.audit_user_id,
+        au.real_name      AS audit_user_name,
+        w.audit_remark,
+        w.apply_time,
+        w.audit_time,
+        w.finish_time,
+        w.village_id,
+        v.village_name
+    </sql>
+
+    <sql id="withdrawJoins">
+        FROM biz_withdraw w
+        JOIN sys_user    u  ON u.id  = w.user_id
+        LEFT JOIN sys_user au ON au.id = w.audit_user_id
+        LEFT JOIN sys_village v ON v.id = w.village_id
+    </sql>
+
+    <select id="selectWithdrawPage" resultType="com.gjf.village.vo.WithdrawVO">
+        SELECT
+        <include refid="withdrawColumns"/>
+        <include refid="withdrawJoins"/>
+        <where>
+            <if test="q.withdrawNo != null and q.withdrawNo != ''">
+                AND w.withdraw_no = #{q.withdrawNo}
+            </if>
+            <if test="q.userId != null">
+                AND w.user_id = #{q.userId}
+            </if>
+            <if test="q.status != null">
+                AND w.status = #{q.status}
+            </if>
+            <!--
+              数据级权限:白名单语义。villageIds 为 null 表示"不加限制"(超管),
+              为 [空列表] 表示"看不到任何数据" —— 这两种情况的区别很关键,
+              所以判断条件是 size() > 0 而不是 != null,和 DataScopeHelper
+              的语义严格对齐。
+            -->
+            <if test="q.villageIds != null and q.villageIds.size() > 0">
+                AND w.village_id IN
+                <foreach collection="q.villageIds" item="vid" open="(" separator="," close=")">
+                    #{vid}
+                </foreach>
+            </if>
+        </where>
+        <!-- 待审核的排在最前:管理员打开这个页面就是要处理它们,
+             按时间倒序会把新提交的混在一堆历史单里 -->
+        ORDER BY (w.status = 0) DESC, w.apply_time DESC, w.id DESC
+    </select>
+
+    <select id="sumAmountByStatus" resultType="java.math.BigDecimal">
+        SELECT IFNULL(SUM(amount), 0)
+        FROM biz_withdraw
+        WHERE user_id = #{userId}
+        AND status IN
+        <foreach collection="statuses" item="st" open="(" separator="," close=")">
+            #{st}
+        </foreach>
+    </select>
+
+</mapper>

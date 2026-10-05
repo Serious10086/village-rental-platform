@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  资金流水查询(钱包的"收益明细")。
+
+  【为什么这里一定要联订单和资源】
+  用户打开钱包看到的是"2026-09-20  支付宝   -1200.00"这样一行,
+  但真正想知道的是"这 1200 是买哪台机器的钱"。流水号对用户没有意义,
+  订单号和资源名才有。加两个 LEFT JOIN 换来的是"不用点进去就能对上账",
+  这个代价值得。
+
+  两个都是 LEFT JOIN:提现类的流水根本不挂订单(order_id 为 NULL),
+  用 INNER JOIN 会让所有提现记录从明细里消失 —— 而提现恰恰是
+  用户最关心的一类流水。
+-->
+<mapper namespace="com.gjf.village.mapper.BizPaymentMapper">
+
+    <select id="selectPaymentPage" resultType="com.gjf.village.vo.PaymentVO">
+        SELECT
+            p.id,
+            p.pay_no,
+            p.order_id,
+            o.order_no,
+            r.resource_name,
+            p.pay_type,
+            p.amount,
+            p.pay_status,
+            p.pay_time,
+            p.remark,
+            p.create_time
+        FROM biz_payment p
+        LEFT JOIN biz_order    o ON o.id = p.order_id
+        LEFT JOIN biz_resource r ON r.id = o.resource_id
+        <where>
+            <if test="q.userId != null">
+                AND p.user_id = #{q.userId}
+            </if>
+            <if test="q.payType != null">
+                AND p.pay_type = #{q.payType}
+            </if>
+            <if test="q.orderId != null">
+                AND p.order_id = #{q.orderId}
+            </if>
+        </where>
+        ORDER BY p.create_time DESC, p.id DESC
+    </select>
+
+    <!--
+      累计入账口径:卖家结算(4) + 押金退还(3),且必须支付成功(1)。
+
+      pay_status = 1 这个条件不能省。失败的流水也在表里(留着排查),
+      未支付/已退款的更不用说 —— 把它们算进"累计收益",
+      用户会发现自己看到的钱从来没到过账上。
+    -->
+    <select id="sumIncome" resultType="java.math.BigDecimal">
+        SELECT IFNULL(SUM(amount), 0)
+        FROM biz_payment
+        WHERE user_id = #{userId}
+          AND pay_status = 1
+          AND pay_type IN (3, 4)
+    </select>
+
+</mapper>

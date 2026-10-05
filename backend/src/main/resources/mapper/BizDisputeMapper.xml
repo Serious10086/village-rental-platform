@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  纠纷查询。
+
+  【这张查询联了六张表,每一张都有明确理由】
+    biz_order    取订单号、原始状态、金额、租期 —— 没有这些,管理员
+                 没法判断"该不该退钱"
+    biz_resource 取资源名,让"告的是哪笔买卖"一眼可见
+    sys_user ×3  申请人、被申请人、处理人
+    sys_village  村组名,后台列表要显示"哪个村的纠纷"
+
+  这不是过度联表。纠纷处理的本质就是"基于交易事实做判断",
+  而这些事实分散在订单和资源里。让管理员点开一条纠纷、
+  再手动去订单管理里搜出那张订单,是把系统的活推给人做。
+-->
+<mapper namespace="com.gjf.village.mapper.BizDisputeMapper">
+
+    <sql id="disputeColumns">
+        d.id,
+        d.dispute_no,
+        d.order_id,
+        d.applicant_id,
+        ap.real_name       AS applicant_name,
+        ap.phone           AS applicant_phone,
+        d.respondent_id,
+        rs.real_name       AS respondent_name,
+        rs.phone           AS respondent_phone,
+        d.dispute_type,
+        d.description,
+        d.evidence_images,
+        d.apply_amount,
+        d.order_status_before,
+        d.status,
+        d.handler_id,
+        hd.real_name       AS handler_name,
+        d.handle_result,
+        d.handle_time,
+        d.village_id,
+        v.village_name,
+        d.create_time,
+        <!-- ── 订单摘要 ── -->
+        o.order_no,
+        o.order_type,
+        o.order_status,
+        o.pay_amount,
+        o.rent_start_date,
+        o.rent_end_date,
+        r.resource_name
+    </sql>
+
+    <sql id="disputeJoins">
+        FROM biz_dispute d
+        JOIN biz_order  o ON o.id = d.order_id
+        <!-- 资源可能已被逻辑删除,但纠纷记录不能因此消失 ——
+             它是一笔已经发生过的争议,和资源在不在架无关 -->
+        LEFT JOIN biz_resource r ON r.id = o.resource_id
+        JOIN sys_user      ap ON ap.id = d.applicant_id
+        JOIN sys_user      rs ON rs.id = d.respondent_id
+        <!-- 待受理的纠纷还没有处理人,必须是 LEFT JOIN -->
+        LEFT JOIN sys_user hd ON hd.id = d.handler_id
+        LEFT JOIN sys_village v ON v.id = d.village_id
+    </sql>
+
+    <resultMap id="disputeMap" type="com.gjf.village.vo.DisputeVO" autoMapping="true">
+        <id property="id" column="id"/>
+        <!-- 库里存的是逗号分隔的字符串,接口要返回数组 -->
+        <result property="evidenceImages" column="evidence_images"
+                typeHandler="com.gjf.village.common.handler.CommaStringListTypeHandler"/>
+    </resultMap>
+
+    <select id="selectDisputePage" resultMap="disputeMap">
+        SELECT
+        <include refid="disputeColumns"/>
+        <include refid="disputeJoins"/>
+        <where>
+            <if test="q.disputeNo != null and q.disputeNo != ''">
+                AND d.dispute_no = #{q.disputeNo}
+            </if>
+            <if test="q.orderId != null">
+                AND d.order_id = #{q.orderId}
+            </if>
+            <if test="q.disputeType != null">
+                AND d.dispute_type = #{q.disputeType}
+            </if>
+            <if test="q.status != null">
+                AND d.status = #{q.status}
+            </if>
+            <if test="q.applicantId != null">
+                AND d.applicant_id = #{q.applicantId}
+            </if>
+            <if test="q.respondentId != null">
+                AND d.respondent_id = #{q.respondentId}
+            </if>
+            <!--
+              "与我有关"必须是 OR:我可能是申请人,也可能是被申请人。
+              写成 applicant_id = 我 AND respondent_id = 我 只会查出
+              "自己告自己"这种不存在的记录,被他人投诉的纠纷一条都看不到。
+              这个 OR 用两个独立等值字段表达不了,所以 DTO 里单独给了
+              relatedUserId。
+            -->
+            <if test="q.relatedUserId != null">
+                AND (d.applicant_id = #{q.relatedUserId} OR d.respondent_id = #{q.relatedUserId})
+            </if>
+            <if test="q.villageIds != null and q.villageIds.size() > 0">
+                AND d.village_id IN
+                <foreach collection="q.villageIds" item="vid" open="(" separator="," close=")">
+                    #{vid}
+                </foreach>
+            </if>
+        </where>
+        <!-- 待受理的排最前,理由同提现审核:这个页面的首要任务是处理未决事项 -->
+        ORDER BY (d.status = 0) DESC, d.create_time DESC, d.id DESC
+    </select>
+
+    <select id="selectDisputeDetail" resultMap="disputeMap">
+        SELECT
+        <include refid="disputeColumns"/>
+        <include refid="disputeJoins"/>
+        WHERE d.id = #{id}
+    </select>
+
+</mapper>

@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  统计查询。
+
+  【为什么四个查询里都有一模一样的 villageIds 片段】
+  数据级权限的白名单只有一处来源(DataScopeHelper),而四个查询都要用它。
+  抽成 <sql> 片段是为了避免"三个写对了、第四个忘了"——忘掉的那个就是
+  越权看别村数据的入口。这和 AiChatRecordMapper 里的做法一致。
+-->
+<mapper namespace="com.gjf.village.mapper.StatMapper">
+
+    <sql id="villageScope">
+        <if test="villageIds != null">
+            AND village_id IN
+            <foreach collection="villageIds" item="vid" open="(" separator="," close=")">
+                #{vid}
+            </foreach>
+        </if>
+    </sql>
+
+    <!--
+      各村统计。直接读视图,字段靠下划线转驼峰自动映射。
+
+      【为什么要 JOIN sys_village 再滤一次 parent_id IS NOT NULL】
+      视图是按 sys_village 的**每一行**汇总的,所以它里面既有村、也有镇
+      (唐昌镇是战旗村/先锋村/金星村的父节点)。镇节点自己不挂资源,
+      那一行全是 0 —— 但"各村对比"图上会多出一对空柱子,
+      公示页的排名里也会多一个 0% 的"村"。过滤掉它,图才对得上有几个村。
+      (不改视图本身:那个视图是批次 1 的产物,而且"每个节点一行"
+       对将来可能要做的镇级汇总是有用的,不该为了这一个查询改它。)
+
+      【为什么 ORDER BY 用 town_name, village_id】
+      村级统计页上超管要选村,下拉的顺序稳定一点更好找。按镇再按 id 排,
+      每次刷新顺序都一样。
+    -->
+    <select id="selectVillageStats" resultType="com.gjf.village.vo.VillageStatVO">
+        SELECT
+            v.village_id, v.village_name, v.town_name,
+            v.resource_total, v.online_count, v.rent_count, v.sell_count,
+            v.high_risk_count, v.user_total,
+            v.order_total, v.order_finished, v.order_using, v.usage_rate
+        FROM v_village_resource_stat v
+        JOIN sys_village sv ON sv.id = v.village_id AND sv.parent_id IS NOT NULL
+        <where>
+            <if test="villageIds != null">
+                v.village_id IN
+                <foreach collection="villageIds" item="vid" open="(" separator="," close=")">
+                    #{vid}
+                </foreach>
+            </if>
+        </where>
+        ORDER BY v.town_name ASC, v.village_id ASC
+    </select>
+
+    <!--
+      在架资源的分类分布。
+
+      只算 resource_status = 1:待审核、已下架、交易中的东西出现在"资源分布"里,
+      这张图就回答不了它本来要回答的问题 —— "村里现在有什么能租"。
+
+      ORDER BY count DESC:饼图的图例按大小排,读起来顺;
+      一样大时按分类名排,保证顺序稳定(不然每次刷新图例顺序都在跳)。
+    -->
+    <select id="selectCategoryDist" resultType="com.gjf.village.vo.StatItemVO">
+        SELECT
+            c.category_name AS name,
+            COUNT(*)        AS count
+        FROM biz_resource r
+        JOIN biz_resource_category c ON c.id = r.category_id
+        WHERE r.deleted = 0
+          AND r.resource_status = 1
+        <include refid="villageScope"/>
+        GROUP BY c.id, c.category_name
+        ORDER BY count DESC, c.category_name ASC
+    </select>
+
+    <!-- 订单状态分布。name 是状态码,中文名由 Service 用 OrderStatusEnum 翻译 -->
+    <select id="selectOrderStatusDist" resultType="com.gjf.village.vo.StatItemVO">
+        SELECT
+            CAST(order_status AS CHAR) AS name,
+            COUNT(*)                   AS count
+        FROM biz_order
+        WHERE 1 = 1
+        <include refid="villageScope"/>
+        GROUP BY order_status
+        ORDER BY order_status ASC
+    </select>
+
+    <!--
+      近 N 天的订单趋势。
+
+      DATE_FORMAT 在 SQL 里做,而不是把时间戳取回来在 Java 里分组:
+      那些订单的完整时间戳对这张图没有用,传回来只是多传几十列数据。
+    -->
+    <select id="selectOrderTrend" resultType="com.gjf.village.vo.OrderTrendVO">
+        SELECT
+            DATE_FORMAT(create_time, '%Y-%m-%d') AS date,
+            COUNT(*)                             AS count
+        FROM biz_order
+        WHERE create_time &gt;= DATE_SUB(CURDATE(), INTERVAL #{days} DAY)
+        <include refid="villageScope"/>
+        GROUP BY DATE_FORMAT(create_time, '%Y-%m-%d')
+        ORDER BY date ASC
+    </select>
+
+</mapper>

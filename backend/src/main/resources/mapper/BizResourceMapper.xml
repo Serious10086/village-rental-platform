@@ -1,0 +1,228 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  资源模块的复杂查询。
+
+  为什么这些 SQL 放在 XML 而不是用 MyBatis-Plus 的条件构造器:
+  它们涉及视图、子查询、全文检索和动态排序,用 Wrapper 拼出来是一长串
+  链式调用,读的人要在脑子里还原成 SQL。写在 XML 里所见即所得。
+-->
+<mapper namespace="com.gjf.village.mapper.BizResourceMapper">
+
+    <!--
+      详情专用的 resultMap。
+
+      存在的唯一理由是那三个逗号分隔的字段需要类型转换器
+      (数据库存 "a.jpg,b.jpg",接口要返回数组)。
+      autoMapping=true 让其余字段照常按下划线转驼峰自动映射,
+      不用把三十多个字段全列一遍。
+    -->
+    <resultMap id="detailMap" type="com.gjf.village.vo.ResourceDetailVO" autoMapping="true">
+        <id property="id" column="id"/>
+        <result property="images" column="images"
+                typeHandler="com.gjf.village.common.handler.CommaStringListTypeHandler"/>
+        <result property="tags" column="tags"
+                typeHandler="com.gjf.village.common.handler.CommaStringListTypeHandler"/>
+        <result property="rentableWeekdays" column="rentable_weekdays"
+                typeHandler="com.gjf.village.common.handler.CommaIntegerListTypeHandler"/>
+    </resultMap>
+
+    <!-- ================================================================
+         可复用的筛选条件片段
+
+         【为什么要抽出来】"前台搜索"和"我的发布"用同一套筛选项,
+         但一个查视图、一个查基表。抽成片段能保证两处行为一致 ——
+         不会出现"列表页能按价格筛,我的发布里同一个价格却不生效"这种问题。
+
+         两个查询都统一把主表起别名为 r,所以片段里直接写 r.xxx 即可,
+         不需要用 ${alias} 那种字符串替换(那会让 SQL 变得难以阅读,
+         而且一旦别名来自外部输入就是注入风险)。
+         ================================================================ -->
+    <sql id="commonFilter">
+        <if test="q.categoryId != null">
+            <!--
+              选了父分类要连带子分类。
+              用户点"农机具"时,期望看到拖拉机、收割机等所有子类;
+              只按 category_id = 农机具 匹配的话一条都查不到 ——
+              因为真正的资源都挂在子分类上。这是个很容易漏的点。
+            -->
+            AND (r.category_id = #{q.categoryId}
+                 OR r.category_id IN (
+                     SELECT id FROM biz_resource_category WHERE parent_id = #{q.categoryId}
+                 ))
+        </if>
+
+        <if test="q.villageIds != null and q.villageIds.size() > 0">
+            AND r.village_id IN
+            <foreach collection="q.villageIds" item="vid" open="(" separator="," close=")">
+                #{vid}
+            </foreach>
+        </if>
+
+        <if test="q.tradeType != null">
+            AND r.trade_type = #{q.tradeType}
+        </if>
+
+        <if test="q.minPrice != null">
+            AND r.price &gt;= #{q.minPrice}
+        </if>
+
+        <if test="q.maxPrice != null">
+            AND r.price &lt;= #{q.maxPrice}
+        </if>
+
+        <!--
+          可用日期筛选:资源可租窗口与用户期望窗口「有重叠」即算命中。
+
+          判定条件是 rent_start_date <= 用户结束日 AND rent_end_date >= 用户开始日,
+          这是标准的区间重叠判定。不用「完全包含」是因为:用户问"下周能租吗",
+          只要资源下周开放中就满足,没必要它全年开放。
+        -->
+        <if test="q.availableStartDate != null and q.availableEndDate != null">
+            AND r.trade_type = 1
+            AND r.rent_start_date &lt;= #{q.availableEndDate}
+            AND r.rent_end_date &gt;= #{q.availableStartDate}
+        </if>
+
+        <if test="q.publisherId != null">
+            AND r.publisher_id = #{q.publisherId}
+        </if>
+
+        <if test="q.resourceStatus != null">
+            AND r.resource_status = #{q.resourceStatus}
+        </if>
+    </sql>
+
+    <!-- ================================================================
+         前台资源搜索
+
+         数据源是 v_resource_list 视图,它已经把 resource_status = 1
+         和 deleted = 0 固化在定义里,未上架的资源不可能从这里漏出去。
+         ================================================================ -->
+    <select id="selectResourcePage" resultType="com.gjf.village.entity.ResourceListView">
+        SELECT r.* FROM v_resource_list r
+        <where>
+            <!--
+              关键词走全文索引。
+
+              这里必须用子查询查基表,不能直接对视图做 MATCH ——
+              MySQL 要求 MATCH(col1, col2, col3) 的列与全文索引定义完全一致,
+              而列表视图刻意没有包含 description(TEXT 大字段,列表用不上),
+              直接写 MATCH(resource_name, tags) 会报"索引列不匹配"。
+            -->
+            <if test="q.keyword != null and q.keyword != ''">
+                AND r.id IN (
+                    SELECT id FROM biz_resource
+                    WHERE MATCH(resource_name, description, tags)
+                          AGAINST(#{q.keyword} IN BOOLEAN MODE)
+                )
+            </if>
+            <include refid="commonFilter"/>
+        </where>
+        <choose>
+            <when test='q.sortBy == "priceAsc"'>ORDER BY r.price ASC</when>
+            <when test='q.sortBy == "priceDesc"'>ORDER BY r.price DESC</when>
+            <when test='q.sortBy == "popular"'>ORDER BY r.view_count DESC, r.order_count DESC</when>
+            <otherwise>ORDER BY r.create_time DESC</otherwise>
+        </choose>
+    </select>
+
+    <!-- ================================================================
+         我的发布
+
+         数据源必须是 biz_resource 基表而不是视图:
+         发布者要看自己全部状态的资源,包括待审核(0)、已驳回(5)、
+         已下架(2)—— 这些都被视图过滤掉了。
+         ================================================================ -->
+    <select id="selectMyResourcePage" resultType="com.gjf.village.vo.MyResourceVO">
+        SELECT
+            r.*,
+            c.category_name,
+            c.category_code,
+            v.village_name,
+            v.town_name,
+            u.real_name     AS publisher_name,
+            u.avatar        AS publisher_avatar,
+            u.credit_score  AS publisher_credit
+        FROM biz_resource r
+        JOIN biz_resource_category c ON c.id = r.category_id
+        JOIN sys_village           v ON v.id = r.village_id
+        JOIN sys_user              u ON u.id = r.publisher_id
+        <where>
+            r.deleted = 0
+            <include refid="commonFilter"/>
+        </where>
+        ORDER BY r.create_time DESC
+    </select>
+
+    <!-- ================================================================
+         资源详情
+
+         一次查询联出分类名、村组名、发布人信息和发布人的成交单数。
+         如果拆成多次查询,详情页要发四五个请求,任何一次失败都会让页面残缺。
+         ================================================================ -->
+    <select id="selectResourceDetail" resultMap="detailMap">
+        SELECT
+            r.*,
+            c.category_name,
+            v.village_name,
+            v.town_name,
+            u.real_name     AS publisher_name,
+            u.avatar        AS publisher_avatar,
+            u.credit_score  AS publisher_credit,
+            (SELECT COUNT(*) FROM biz_order o
+              WHERE o.seller_id = r.publisher_id AND o.order_status = 4) AS publisher_order_count
+        FROM biz_resource r
+        JOIN biz_resource_category c ON c.id = r.category_id
+        JOIN sys_village           v ON v.id = r.village_id
+        JOIN sys_user              u ON u.id = r.publisher_id
+        WHERE r.id = #{id}
+          AND r.deleted = 0
+    </select>
+
+    <!-- ================================================================
+         按主键查资源并加行锁(下单流程专用)
+
+         FOR UPDATE 锁住这一行,把同一资源上的并发下单请求串行化。
+         调用方必须在事务内,否则锁在语句结束时就释放了,起不到作用。
+
+         这里刻意不带任何 JOIN:下单流程只需要资源自身的字段
+         (价格、押金、状态、可租窗口),联表查询会拉长加锁语句的持有时间。
+         加锁语句应当尽可能短。
+         ================================================================ -->
+    <select id="selectByIdForUpdate" resultType="com.gjf.village.entity.BizResource">
+        SELECT * FROM biz_resource
+        WHERE id = #{id} AND deleted = 0
+        FOR UPDATE
+    </select>
+
+    <!-- ================================================================
+         三个冗余计数的数据库端自增
+
+         全部写成 `列 = 列 + 1`,而不是"查出来加一再写回" ——
+         后者在并发下会丢更新:两个人同时读到 100,各自写回 101。
+
+         浏览量和收藏数原本只当装饰,但批次 8 的村组热度推荐直接按
+         view_count 排序、收藏数也会出现在推荐理由里 ——
+         它们从"给人看一眼"变成了"喂给算法的输入",要求就不一样了。
+
+         减一那两条带 `> 0` 的防御条件,理由同留言板的点赞计数:
+         冗余计数的正确性依赖"每次增删都成对",漏掉一次配对也不该
+         让它掉成负数 —— 负的收藏数在界面上没法解释。
+         ================================================================ -->
+    <update id="increaseViewCount">
+        UPDATE biz_resource SET view_count = view_count + 1 WHERE id = #{id}
+    </update>
+
+    <update id="increaseFavoriteCount">
+        UPDATE biz_resource SET favorite_count = favorite_count + 1 WHERE id = #{id}
+    </update>
+
+    <update id="decreaseFavoriteCount">
+        UPDATE biz_resource SET favorite_count = favorite_count - 1
+        WHERE id = #{id} AND favorite_count &gt; 0
+    </update>
+
+</mapper>

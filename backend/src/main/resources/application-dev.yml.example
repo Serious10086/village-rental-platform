@@ -1,0 +1,64 @@
+# ============================================================================
+#  开发环境配置 —— 模板
+#
+#  用法:复制成 application-dev.yml 再填自己的值。
+#      cp application-dev.yml.example application-dev.yml
+#
+#  application-dev.yml 被 .gitignore 挡在外面,不会进公开仓库 ——
+#  它里面有数据库密码和 AI 密钥。这个 .example 是进仓库的那一份,
+#  所以它只能有占位符,不能有真值。
+# ============================================================================
+
+spring:
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    # 【踩坑记录】characterEncoding 要写 Java 的字符集名 UTF-8,
+    # 不能写 MySQL 的字符集名 utf8mb4 —— 写错会直接抛
+    #   java.sql.SQLException: Unsupported character encoding 'utf8mb4'
+    # 连接根本建不起来。Connector/J 8.x 在服务端支持时会自动使用 utf8mb4,
+    # 所以这里写 UTF-8 就能正确存取中文和 emoji。
+    url: jdbc:mysql://localhost:3306/village_rental?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true
+    username: ${DB_USERNAME:root}
+    # 本地 MySQL 的 root 密码
+    password: ${DB_PASSWORD:}
+
+    # 连接池用 HikariCP(Spring Boot 默认,零额外依赖)
+    hikari:
+      pool-name: VillageRentalHikariCP
+      minimum-idle: 5
+      maximum-pool-size: 20
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      connection-test-query: SELECT 1
+
+# ── AI 智能客服(批次 7) ─────────────────────────────────────
+# 只覆盖密钥这一项,其余(base-url / 模型 / 超时 / 重试)都在 application.yml 里 ——
+# 那些是"设计决定",不该随环境变;只有密钥是"环境相关"的。
+#
+# Key 从 https://platform.deepseek.com 拿(需要先充值,没有可长期用的免费额度)。
+# 也可以完全不给这个文件,改成在系统里设环境变量 DEEPSEEK_API_KEY。
+app:
+  ai:
+    deepseek:
+      api-key: ${DEEPSEEK_API_KEY:}
+
+# ── 日志 ─────────────────────────────────────────────────────
+logging:
+  level:
+    root: info
+    com.gjf.village: debug
+    # 打印 MyBatis 执行的 SQL,开发期排查问题必备
+    com.gjf.village.mapper: debug
+    # 关掉 Spring 的启动噪音
+    org.springframework: warn
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n"
+
+# ── API 文档 ─────────────────────────────────────────────────
+springdoc:
+  # 开发期打开 Swagger UI
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true

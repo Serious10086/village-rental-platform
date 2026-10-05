@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- 乡村闲置资源租售平台 —— 简化的房屋 + 田地意象,主色与系统一致 -->
+  <rect width="64" height="64" rx="14" fill="#2563eb"/>
+  <!-- 田垄 -->
+  <path d="M10 46h44" stroke="#93c5fd" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M14 52h36" stroke="#93c5fd" stroke-width="2.5" stroke-linecap="round" opacity=".6"/>
+  <!-- 房屋 -->
+  <path d="M32 14 14 28v18h36V28z" fill="#ffffff"/>
+  <path d="M32 14 14 28h36z" fill="#bfdbfe"/>
+  <!-- 门 -->
+  <rect x="27" y="34" width="10" height="12" rx="1.5" fill="#2563eb"/>
+</svg>

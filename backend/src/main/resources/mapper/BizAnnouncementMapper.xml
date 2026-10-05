@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  公告查询。
+
+  【这条 SQL 里最值钱的一处细节:括号】
+
+      AND (a.village_id IS NULL OR a.village_id = #{q.villageId})
+
+  外面这层括号是<b>必须</b>的。AND 的优先级高于 OR,一旦漏掉括号
+  就变成:
+
+      (status = 1 AND village_id IS NULL) OR village_id = 2
+
+  于是——所有村的草稿公告(village_id = 2 且 status = 0)会全部
+  通过筛选。这不是"结果不太准",这是未发布的公告泄露给所有人。
+  一个括号就能造成越权,这类条件必须连括号一起读。
+
+  【为什么这里不担心索引】
+  idx_ann_village_status(village_id, status, publish_time) 的最左列
+  被 OR 拆开,确实用不上索引了。但公告是村级内容,一个村几十条、
+  全平台也就几百条,全表扫的代价可以忽略;而给"全平台 + 本村"
+  这个并集另建一套索引,收益远不抵维护成本。判断依据是数据量级,
+  不是"能建索引就建"。
+-->
+<mapper namespace="com.gjf.village.mapper.BizAnnouncementMapper">
+
+    <!-- 列表用的列:刻意不含 a.content -->
+    <sql id="listColumns">
+        a.id, a.title, a.cover_url, a.notice_type,
+        a.publisher_id, a.village_id, a.is_top, a.view_count,
+        a.status, a.publish_time, a.create_time,
+        u.real_name AS publisher_name,
+        v.village_name
+    </sql>
+
+    <select id="selectPage" resultType="com.gjf.village.vo.AnnouncementVO">
+        SELECT
+            <include refid="listColumns"/>
+        FROM biz_announcement a
+        JOIN sys_user    u ON u.id = a.publisher_id
+        <!-- 全平台公告的 village_id 是 NULL,这里必须 LEFT JOIN:
+             用 INNER JOIN 的话全局公告会因为 v.id 匹配不上而整行消失 ——
+             而全局公告恰恰是最该让所有人看到的那种 -->
+        LEFT JOIN sys_village v ON v.id = a.village_id
+        WHERE a.deleted = 0
+        <choose>
+            <!--
+              前台口径。状态在这里被硬编码成「已发布」而不是由 Service
+              传进来:调用方永远可能忘、可能传错,而 SQL 不会。
+              把安全条件放在最靠近数据的那一层,是这个项目里反复出现的
+              做法(视图固化 resource_status = 1 也是同一个思路)。
+            -->
+            <when test="q.includeGlobal != null and q.includeGlobal">
+                AND a.status = 1
+                AND (a.village_id IS NULL OR a.village_id = #{q.villageId})
+            </when>
+            <!--
+              后台口径。村组白名单来自 DataScopeHelper,超管的 scope 是
+              「全部」,此时 villageIds 为 null,<if> 不生效 —— 不加限制
+              正是超管应得的。
+            -->
+            <otherwise>
+                <if test="q.villageIds != null">
+                    AND a.village_id IN
+                    <foreach collection="q.villageIds" item="vid" open="(" separator="," close=")">
+                        #{vid}
+                    </foreach>
+                </if>
+                <if test="q.status != null">
+                    AND a.status = #{q.status}
+                </if>
+            </otherwise>
+        </choose>
+        <!-- 类型与关键词两种口径都要用,放在 choose 外面 -->
+        <if test="q.noticeType != null">
+            AND a.notice_type = #{q.noticeType}
+        </if>
+        <if test="q.keyword != null and q.keyword != ''">
+            AND a.title LIKE CONCAT('%', #{q.keyword}, '%')
+        </if>
+        <!-- 置顶的排最前;publish_time 在草稿上是 NULL,MySQL 的 DESC 会把
+             NULL 排在最后,正好是想要的顺序(没发的沉底) -->
+        ORDER BY a.is_top DESC, a.publish_time DESC, a.id DESC
+    </select>
+
+    <select id="selectDetail" resultType="com.gjf.village.vo.AnnouncementVO">
+        SELECT
+            <include refid="listColumns"/>,
+            a.content
+        FROM biz_announcement a
+        JOIN sys_user    u ON u.id = a.publisher_id
+        LEFT JOIN sys_village v ON v.id = a.village_id
+        WHERE a.deleted = 0
+          AND a.id = #{id}
+    </select>
+
+    <update id="increaseViewCount">
+        UPDATE biz_announcement SET view_count = view_count + 1 WHERE id = #{id}
+    </update>
+
+</mapper>

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  操作日志查询。
+
+  【日期区间的写法:为什么用 < 次日零点 而不是 <= 当天】
+  `create_time` 是 DATETIME(带时分秒),而前端传的是日期。
+  写成 `create_time <= '2026-09-28'` 的话,那天 00:00:01 之后的记录
+  全被排除掉 —— 用户选"到今天"却看不到今天的东西,是个很难注意到的错。
+  所以结束日期的条件是 `< 次日零点`,把整天都包进来。
+-->
+<mapper namespace="com.gjf.village.mapper.SysOperationLogMapper">
+
+    <select id="selectLogPage" resultType="com.gjf.village.entity.SysOperationLog">
+        SELECT * FROM sys_operation_log
+        WHERE 1 = 1
+        <if test="q.username != null and q.username != ''">
+            AND username LIKE CONCAT('%', #{q.username}, '%')
+        </if>
+        <if test="q.module != null and q.module != ''">
+            AND module = #{q.module}
+        </if>
+        <if test="q.status != null">
+            AND status = #{q.status}
+        </if>
+        <if test="q.startDate != null">
+            AND create_time &gt;= #{q.startDate}
+        </if>
+        <if test="q.endDate != null">
+            AND create_time &lt; DATE_ADD(#{q.endDate}, INTERVAL 1 DAY)
+        </if>
+        ORDER BY create_time DESC, id DESC
+    </select>
+
+    <select id="selectDistinctModules" resultType="java.lang.String">
+        SELECT DISTINCT module FROM sys_operation_log
+        WHERE module IS NOT NULL AND module &lt;&gt; ''
+        ORDER BY module ASC
+    </select>
+
+</mapper>

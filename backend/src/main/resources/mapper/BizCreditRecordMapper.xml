@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.gjf.village.mapper.BizCreditRecordMapper">
+
+    <!-- ================================================================
+         信用流水分页
+
+         【为什么 JOIN 条件是 biz_type = 1 而不只是 id 相等】
+         biz_id 是<b>多态</b>关联:它可能是订单ID,也可能指向评价、
+         提现单或什么都不指(管理员手动调整)。只写 o.id = c.biz_id
+         会让一条 biz_id 恰好等于某订单ID的评价流水错误地带上那个单号。
+         必须把"这确实是订单类流水"一起写进连接条件。
+
+         这也是 biz_id 无法建物理外键的代价 —— 见论文「设计权衡」一节。
+         ================================================================ -->
+    <select id="selectRecordPage" resultType="com.gjf.village.vo.CreditRecordVO">
+        SELECT
+            c.*,
+            o.order_no AS biz_no
+        FROM biz_credit_record c
+        LEFT JOIN biz_order o
+               ON c.biz_type = 1 AND o.id = c.biz_id
+        <where>
+            <if test="q.userId != null">
+                AND c.user_id = #{q.userId}
+            </if>
+            <if test="q.bizType != null">
+                AND c.biz_type = #{q.bizType}
+            </if>
+            <if test="q.villageIds != null and q.villageIds.size() > 0">
+                AND c.village_id IN
+                <foreach collection="q.villageIds" item="vid" open="(" separator="," close=")">
+                    #{vid}
+                </foreach>
+            </if>
+        </where>
+        ORDER BY c.create_time DESC, c.id DESC
+    </select>
+
+</mapper>

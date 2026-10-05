@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  容器内构建用的 Maven 配置。
+
+  【为什么不直接用根目录那份 maven-settings.xml】
+  那份是为**本机**写的,里面有一行
+      <localRepository>D:/bishe/claude/m2repo</localRepository>
+  它把依赖锁死在 D 盘 —— 本机 C 盘只剩十几 G,挪走是对的。
+  但容器里没有 D 盘,这行会让 Maven 试图往一个不存在的路径写,构建直接失败。
+
+  容器里要的东西只有一样:**阿里云源**。中央仓库在国内拉依赖慢到不可用,
+  而这一层的下载量在首次构建时有两百多兆。
+
+  本地仓库用容器内的默认值(/root/.m2/repository),再由 Dockerfile 挂
+  cache mount —— 依赖在多次构建之间复用,不会每次都重下一遍。
+-->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
+                              https://maven.apache.org/xsd/settings-1.0.0.xsd">
+
+    <mirrors>
+        <mirror>
+            <id>aliyun-central</id>
+            <name>阿里云公共仓库</name>
+            <url>https://maven.aliyun.com/repository/public</url>
+            <mirrorOf>central</mirrorOf>
+        </mirror>
+    </mirrors>
+
+    <profiles>
+        <profile>
+            <id>jdk17</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+                <jdk>17</jdk>
+            </activation>
+            <properties>
+                <maven.compiler.source>17</maven.compiler.source>
+                <maven.compiler.target>17</maven.compiler.target>
+                <!-- 强制 UTF-8:否则容器里编译出的中文日志是乱码 -->
+                <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+                <file.encoding>UTF-8</file.encoding>
+            </properties>
+        </profile>
+    </profiles>
+
+</settings>

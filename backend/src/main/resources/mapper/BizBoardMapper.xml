@@ -1,0 +1,204 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  留言板查询。
+
+  【为什么每条查询都要手写 deleted = 0】
+  MyBatis-Plus 的 @TableLogic 只在它自己生成的 SQL 里生效(BaseMapper 的
+  selectList / selectById 那些)。这里走的是手写 SQL,框架不会替我补条件 ——
+  漏写的表现是"删掉的留言又冒出来了",而且只在删过之后才复现。
+  这一类"框架帮不了你"的地方,只能靠把条件写在明面上。
+
+  【为什么 liked 用 EXISTS 而不是 LEFT JOIN biz_board_like】
+  用 LEFT JOIN 的话,一条留言被 N 个人点赞就会膨胀成 N 行,
+  分页的 total 也跟着翻倍 —— 而这里只关心"我点没点过",
+  是/否两个值,EXISTS 正好且不放大行数。
+-->
+<mapper namespace="com.gjf.village.mapper.BizBoardMapper">
+
+    <!-- images 存的是逗号分隔字符串,接口要返回数组 -->
+    <resultMap id="itemMap" type="com.gjf.village.vo.BoardItemVO" autoMapping="true">
+        <id property="id" column="id"/>
+        <result property="images" column="images"
+                typeHandler="com.gjf.village.common.handler.CommaStringListTypeHandler"/>
+    </resultMap>
+
+    <!-- 作者信息与点赞状态是两种查询共用的列,抽出来免得两处写不一样 -->
+    <sql id="itemColumns">
+        b.id, b.parent_id, b.content, b.images, b.like_count, b.reply_count,
+        b.is_filtered, b.status, b.create_time,
+        b.user_id, u.avatar AS user_avatar,
+        b.village_id, v.village_name
+    </sql>
+
+    <!--
+      作者显示名。
+
+      留言板是<b>所有人可见</b>的公共讨论区,所以这里显示的是实名
+      —— 村级熟人社会里,实名本身就能压住大部分乱说话,这不是副作用
+      而是想要的效果。但对未实名的用户 real_name 是 NULL(见 sys_user
+      的建表注释:唯一索引容许 NULL,未实名的用户不填身份证),
+      直接显示会是一片空白,所以退化成打码手机号而不是完整手机号:
+      能认出是谁发的,又不至于把手机号公开在页面上被人爬走。
+    -->
+    <sql id="authorName">
+        COALESCE(u.real_name,
+                 CONCAT(LEFT(u.phone, 3), '****', RIGHT(u.phone, 4))) AS user_name
+    </sql>
+
+    <sql id="likedColumn">
+        EXISTS (SELECT 1 FROM biz_board_like l
+                 WHERE l.board_id = b.id AND l.user_id = #{me}) AS liked
+    </sql>
+
+    <!-- ================================================================
+         前台:主帖列表
+
+         三条固定条件(status = 1、deleted = 0、parent_id IS NULL)写在
+         SQL 里而不是靠调用方传参:
+           · 前台永远只看得到正常状态的留言,不提供"看隐藏的"这个选项
+             —— 否则前端传个 status=2 就能读到被隐藏的违规内容
+           · 回复不在这里出现,它们由 selectReplyPage 单独查
+         ================================================================ -->
+    <select id="selectRootPage" resultMap="itemMap">
+        SELECT
+            <include refid="itemColumns"/>,
+            <include refid="authorName"/>,
+            <include refid="likedColumn"/>
+        FROM biz_board b
+        JOIN sys_user   u ON u.id = b.user_id
+        LEFT JOIN sys_village v ON v.id = b.village_id
+        WHERE b.deleted = 0
+          AND b.status = 1
+          AND b.parent_id IS NULL
+          AND b.village_id = #{q.villageId}
+        <if test="q.userId != null">
+            AND b.user_id = #{q.userId}
+        </if>
+        <if test="q.keyword != null and q.keyword != ''">
+            AND b.content LIKE CONCAT('%', #{q.keyword}, '%')
+        </if>
+        ORDER BY b.create_time DESC, b.id DESC
+    </select>
+
+    <!-- ================================================================
+         前台:某条主帖下的回复
+
+         这里<b>也</b>要带 status = 1 和 deleted = 0 —— 不能因为
+         "主帖是正常的"就假定"下面的回复也是正常的"。管理员隐藏的可能
+         正是某条回复,而主帖好好的。
+         ================================================================ -->
+    <select id="selectReplyPage" resultMap="itemMap">
+        SELECT
+            <include refid="itemColumns"/>,
+            <include refid="authorName"/>,
+            <include refid="likedColumn"/>
+        FROM biz_board b
+        JOIN sys_user   u ON u.id = b.user_id
+        LEFT JOIN sys_village v ON v.id = b.village_id
+        WHERE b.deleted = 0
+          AND b.status = 1
+          AND b.parent_id = #{parentId}
+        ORDER BY b.create_time ASC, b.id ASC
+    </select>
+
+    <!-- ================================================================
+         后台:留言列表
+
+         与前台的三处差别:
+           1. 不带 status = 1 —— 后台要能看到自己隐藏过的
+           2. 不带 parent_id IS NULL —— 回复同样可能违规,只巡查主帖会漏一半
+           3. 村组过滤来自 DataScopeHelper 注入的 villageIds 白名单,
+              而不是前端传的 villageId。超管的 scope 是"全部",
+              此时 villageIds 为 null,<if> 不生效,自然就是不加限制
+         ================================================================ -->
+    <select id="selectAdminPage" resultMap="itemMap">
+        SELECT
+            <include refid="itemColumns"/>,
+            <include refid="authorName"/>
+        FROM biz_board b
+        JOIN sys_user   u ON u.id = b.user_id
+        LEFT JOIN sys_village v ON v.id = b.village_id
+        WHERE b.deleted = 0
+        <if test="q.villageIds != null">
+            AND b.village_id IN
+            <foreach collection="q.villageIds" item="vid" open="(" separator="," close=")">
+                #{vid}
+            </foreach>
+        </if>
+        <if test="q.onlyRoot != null and q.onlyRoot">
+            AND b.parent_id IS NULL
+        </if>
+        <if test="q.onlyFiltered != null and q.onlyFiltered">
+            AND b.is_filtered = 1
+        </if>
+        <if test="q.status != null">
+            AND b.status = #{q.status}
+        </if>
+        <if test="q.keyword != null and q.keyword != ''">
+            AND b.content LIKE CONCAT('%', #{q.keyword}, '%')
+        </if>
+        ORDER BY b.create_time DESC, b.id DESC
+    </select>
+
+    <!-- ================================================================
+         取主帖,同时把这一行锁成排他锁。
+
+         【为什么写留言板的事务必须先执行这一条】
+         点赞和回复都要写两处:先往子行插一条(biz_board_like,或者 parent_id
+         指向主帖的那条回复),再回主帖行把冗余计数 +1。而"先插子行"这一步会
+         顺带在主帖行上加一把**共享锁** —— 这是外键检查要求的:要往
+         biz_board_like.board_id 里写值,MySQL 得先确认被引用的那行还在。
+
+         于是两个并发请求各自攥着主帖行的共享锁,又都想去把同一个计数 +1
+         (需要排他锁)。共享锁之间不冲突、共享锁与排他锁冲突 —— 两边都在等
+         对方先松手,环就闭合了。这是实测出来的,InnoDB 死锁日志里两边一字不差:
+             (1) HOLDS   lock mode S locks rec but not gap
+             (1) WAITING lock_mode X locks rec but not gap
+             (2) HOLDS   lock mode S locks rec but not gap
+             (2) WAITING lock_mode X locks rec but not gap
+         表现是 5 个人同时点一条帖:2 个报"系统繁忙",计数只加到 3。
+
+         【解法:把上锁顺序定死 —— 先主帖行,后子行和计数】
+         事务一开始就用这条语句把主帖行锁住(而不是像 selectById 那样读一把
+         就走)。后面无论插子行还是改计数,需要的锁这把都已经覆盖:外键检查
+         要的共享锁,自己握着的排他锁就够了(同一事务不会和自己冲突);计数的
+         那条 UPDATE 更是在手里。同一个帖子上的并发请求在第一步就排队,依次
+         执行,上面那个环根本形不成。
+
+         注意这跟隔离级别无关 —— READ COMMITTED 下照样死锁(已验证)。
+         锁升级类的死锁只能靠顺序治,不能靠降隔离级别治。
+
+         deleted = 0 必须手写:@TableLogic 只对框架自己生成的 SQL 生效。
+         ================================================================ -->
+    <select id="selectByIdForUpdate" resultType="com.gjf.village.entity.BizBoard">
+        SELECT * FROM biz_board WHERE id = #{id} AND deleted = 0 FOR UPDATE
+    </select>
+
+    <!-- ================================================================
+         冗余计数的三个自增 / 自减
+
+         全部在数据库端完成,不经过 Java 内存。理由和余额自增一样:
+         "读出来改完写回去"在并发下会丢更新。
+         ================================================================ -->
+    <update id="increaseLikeCount">
+        UPDATE biz_board SET like_count = like_count + 1 WHERE id = #{id}
+    </update>
+
+    <update id="decreaseLikeCount">
+        UPDATE biz_board SET like_count = like_count - 1
+        WHERE id = #{id} AND like_count &gt; 0
+    </update>
+
+    <update id="increaseReplyCount">
+        UPDATE biz_board SET reply_count = reply_count + 1 WHERE id = #{id}
+    </update>
+
+    <update id="decreaseReplyCount">
+        UPDATE biz_board SET reply_count = reply_count - 1
+        WHERE id = #{id} AND reply_count &gt; 0
+    </update>
+
+</mapper>

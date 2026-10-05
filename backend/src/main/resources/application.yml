@@ -1,0 +1,191 @@
+# ============================================================================
+#  乡村闲置资源租售平台 —— 主配置
+#
+#  通用配置放这里,环境相关的(数据库密码、日志级别)放 application-dev.yml。
+#  启动时通过 spring.profiles.active 选择环境,默认 dev。
+# ============================================================================
+
+server:
+  port: 8080
+  servlet:
+    context-path: /
+  # Tomcat 编码,配合 MAVEN_OPTS 里的 -Dfile.encoding=UTF-8
+  tomcat:
+    uri-encoding: UTF-8
+
+  # 【部署在反向代理后面时必须加这一行】
+  # 生产环境的部署形态是"浏览器 → Nginx → 后端",后端自己监听 8080,
+  # 而浏览器访问的是 Nginx 的地址(比如 http://localhost:8088)。
+  #
+  # 不加这一行会出什么事:浏览器对 POST 请求会带 Origin 头,Spring 的 CORS
+  # 判断会拿 Origin 和"请求自己"比 —— 它看到的是 scheme=http / host=localhost /
+  # port=8080,而 Origin 写的是 8088,**端口对不上就判定成跨域**,
+  # 然后因为 8088 不在 allowed-origins 里,直接返回 403 Invalid CORS request。
+  #
+  # 这个 bug 的形态很误导:GET 请求浏览器不带 Origin,所以列表、详情这些
+  # 页面全都正常,唯独**登录、下单、发布这类 POST 全部 403** ——
+  # 看起来像"后端接口挂了",其实是同源请求被当成了跨域。
+  # 实测就是这样:部署后首页能开、资源列表有数据,一登录就失败。
+  #
+  # framework 策略让 Spring 从 X-Forwarded-Proto / -Host / -Port
+  # (由 Nginx 注入,见 docker/nginx.conf)还原出请求的真实来源,
+  # 还原之后它和 Origin 是一致的,同源成立,CORS 检查自然不触发。
+  # 顺带 X-Forwarded-For 也会被正确识别,不用业务代码自己去读。
+  forward-headers-strategy: framework
+
+spring:
+  application:
+    name: village-rental-platform
+
+  profiles:
+    active: dev
+
+  # ── JSON 序列化 ──────────────────────────────────────────────
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+    # 不序列化 null 字段,减少响应体积(前端用可选链处理即可)
+    default-property-inclusion: non_null
+    serialization:
+      # 关闭"日期序列化成时间戳",让前端直接拿到可读字符串
+      write-dates-as-timestamps: false
+
+  # ── 文件上传 ────────────────────────────────────────────────
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 50MB
+
+# ── MyBatis-Plus ─────────────────────────────────────────────
+mybatis-plus:
+  # XML 映射文件位置(复杂 SQL、视图查询写在这里)
+  mapper-locations: classpath*:/mapper/**/*.xml
+  # 实体类包,让 XML 里可以直接写类名不用全限定名
+  type-aliases-package: com.gjf.village.entity
+  configuration:
+    # 数据库下划线字段 → Java 驼峰属性,自动映射
+    map-underscore-to-camel-case: true
+    # 查询结果为 null 的字段也参与映射(配合 Map 返回值时需要)
+    call-setters-on-nulls: true
+    # 关闭 MyBatis 的二级缓存:本项目的缓存策略由 Redis 层控制,
+    # 二级缓存在多实例部署下会产生脏读
+    cache-enabled: false
+  global-config:
+    banner: false
+    db-config:
+      # 主键策略:数据库自增
+      id-type: auto
+      # 逻辑删除配置 —— @TableLogic 注解的字段会按这个规则处理
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+# ── 业务配置 ─────────────────────────────────────────────────
+app:
+  version: 1.0.0
+  cors:
+    allowed-origins: http://localhost:5173,http://127.0.0.1:5173
+
+  security:
+    # 免登录即可访问的路径(逗号分隔,支持 Ant 风格通配)
+    #
+    # 注意:这些路径会「放行」而不是「拒绝」。拦截器仍然会尝试解析 token,
+    # 所以公开接口也能知道当前访问者是谁 —— 比如资源列表要标记
+    # "我收藏过的"、留言板要标记 "我点过赞的"。
+    #
+    # 【必须写成单行】用 YAML 的 >- 折叠写法会把换行变成空格,
+    # 分隔后的每个路径前都会多一个空格,AntPathMatcher 就匹配不上了。
+    # 留言板只公开「读」:列表和回复不要登录,发帖/点赞/删除都要。
+    # 写操作必须知道是谁做的,这是留言板能保持秩序的前提。
+    #
+    # 批次 8 又加了两个:
+    #   /api/recommend/** —— 首页和详情页的推荐位。它们所在的页面本来就公开,
+    #       登录才能看会显得很别扭。游客拿到的是全平台热门(没有行为可供
+    #       个性化,这是事实而不是降级),而且游客的访问不计入点击率统计。
+    #   /api/behavior/** —— 前端上报浏览。游客也会调它,而它什么都不该做
+    #       (游客不采集)。不放行的话前端会收到 401、控制台多一条红字,
+    #       却没有任何实际影响 —— 前端不该为了一个旁路功能去关心登录态。
+    #       没有越权风险:user_id 来自 token,从不接受请求体传入。
+    whitelist: /api/auth/login,/api/auth/register,/api/ping/**,/api/village/**,/api/category/**,/api/resource/list,/api/resource/detail/**,/api/announcement/list,/api/announcement/detail/**,/api/board/list,/api/board/replies,/api/recommend/**,/api/behavior/**,/upload/**,/error
+
+  # JWT 配置(批次 1 使用)
+  jwt:
+    # 密钥必须是 32 字节以上,否则 HS256 会抛 WeakKeyException
+    # 真实值不写在这里 —— 这个文件会随 git 提交。
+    # 开发期的值放在 application-dev.yml(见根目录 .gitignore,不进仓库);
+    # 部署时用环境变量 JWT_SECRET 覆盖即可。
+    secret: ${JWT_SECRET:}
+    # token 有效期(分钟)
+    expire-minutes: 720
+    header: Authorization
+    prefix: "Bearer "
+
+  # 文件上传(批次 3 使用)
+  upload:
+    # 上传文件的物理存储目录,部署时挂 Docker volume
+    path: D:/bishe/claude/upload
+    # 对外访问的 URL 前缀
+    url-prefix: /upload
+
+  # ── AI 智能客服(批次 7) ─────────────────────────────────────
+  #
+  # 【密钥不写在这里】
+  # 主配置是进仓库的,所以这里只认环境变量;开发期的真实值写在
+  # application-dev.yml(那个文件在 .gitignore 里),Docker 部署时注入
+  # DEEPSEEK_API_KEY 环境变量。两条路都走,谁也不用改代码。
+  ai:
+    deepseek:
+      api-key: ${DEEPSEEK_API_KEY:}
+      base-url: https://api.deepseek.com
+
+      # ── 模型 ──────────────────────────────────────────────────
+      # 2026-09-27 实测 GET /models 的可用值:
+      #   deepseek-flash     DeepSeek-V4.1-Flash,1M 上下文,支持图片输入
+      #   deepseek-v4-pro    DeepSeek-V4-Pro
+      # (deepseek-chat / deepseek-reasoner 已于 2026-07-24 退役)
+      #
+      # ⚠【模型名写错不会报错】实测传已退役的 deepseek-chat:返回 200,
+      #   而且响应体里的 model 被换成了 deepseek-flash —— 服务端会
+      #   静默回退到默认模型。也就是说模型名配错是**发现不了**的,
+      #   所以启动时会把实际生效的模型名打进日志。
+      model: deepseek-flash
+
+      # ── 超时 ──────────────────────────────────────────────────
+      # 连接 3s:连不上是网络/防火墙问题,重试也白搭,早点失败早点降级
+      # 读取 10s:模型在生成,要给它时间。这个值直接对应验收里的
+      #          "10 秒内返回业务相关答案",降级阈值和它保持一致
+      connect-timeout-seconds: 3
+      read-timeout-seconds: 10
+
+      # ── 重试 ──────────────────────────────────────────────────
+      # 只重试"可能自愈"的失败(连接失败 / 429 限流 / 5xx),
+      # 鉴权失败和余额不足重试多少次都一样,不重试。
+      # 【读取超时不重试】已经等满 10 秒了,再重试就是 20 秒 ——
+      # 用户等不到那么久,不如直接走兜底话术。
+      max-retries: 1
+
+      # ── 思维链 ────────────────────────────────────────────────
+      # 关掉。实测同一句"租拖拉机押金怎么算?":
+      #   开着:completion 241 tokens(其中 reasoning 200+)、耗时 1918ms
+      #   关掉:completion  20 tokens、耗时 1118ms
+      # 客服问答用不上推理,而 reasoning_content 有个真实风险 ——
+      # 它和 content 是两个字段,一旦哪处取错字段,用户会看到
+      # 一段"我们需要回答用户中文问题…"的内心独白。
+      # 另外 max_tokens 给小的时候 reasoning 会把预算吃光,
+      # 表现为 HTTP 200 但 content 是空字符串(这个坑实测踩到过)。
+      disable-thinking: true
+
+      # 单次回答的 token 上限。关掉思维链之后,一次客服回答通常
+      # 几十个 token,800 足够写一段详细说明了
+      max-output-tokens: 800
+
+# ── API 文档 ─────────────────────────────────────────────────
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    tags-sorter: alpha
+    operations-sorter: alpha
+  api-docs:
+    path: /v3/api-docs
+  # 只扫描我们自己写的 controller,不扫描框架的
+  packages-to-scan: com.gjf.village.controller

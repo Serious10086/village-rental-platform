@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  评价模块的查询。
+
+  列表一次联出四张表:订单(取订单号)、资源(取名称和封面)、
+  sys_user 两次(评价人、被评价人)。
+  不联的话列表里每条都要再查三次,一页十条就是三十次查询。
+-->
+<mapper namespace="com.gjf.village.mapper.BizEvaluationMapper">
+
+    <!--
+      images 是逗号分隔的字符串,接口要返回数组,所以需要类型转换器。
+      autoMapping=true 让其余字段照常按下划线转驼峰自动映射。
+    -->
+    <resultMap id="evaluationMap" type="com.gjf.village.vo.EvaluationVO" autoMapping="true">
+        <id property="id" column="id"/>
+        <result property="images" column="images"
+                typeHandler="com.gjf.village.common.handler.CommaStringListTypeHandler"/>
+    </resultMap>
+
+    <!-- ================================================================
+         评价列表
+
+         LEFT JOIN 而不是 JOIN:评价人和被评价人理论上一定存在(外键保证),
+         但资源可能被逻辑删除了,用 INNER JOIN 会让这些评价整条消失 ——
+         评价是信用记录的一部分,不该因为资源下架就查不到。
+         ================================================================ -->
+    <select id="selectEvaluationPage" resultMap="evaluationMap">
+        SELECT
+            e.*,
+            o.order_no,
+            r.resource_name,
+            r.cover_url       AS resource_cover,
+            f.real_name       AS from_user_name,
+            f.avatar          AS from_user_avatar,
+            t.real_name       AS to_user_name
+        FROM biz_evaluation e
+        JOIN biz_order            o ON o.id = e.order_id
+        LEFT JOIN biz_resource    r ON r.id = e.resource_id
+        JOIN sys_user             f ON f.id = e.from_user_id
+        JOIN sys_user             t ON t.id = e.to_user_id
+        <where>
+            <if test="q.orderId != null">
+                AND e.order_id = #{q.orderId}
+            </if>
+            <if test="q.resourceId != null">
+                AND e.resource_id = #{q.resourceId}
+            </if>
+            <if test="q.fromUserId != null">
+                AND e.from_user_id = #{q.fromUserId}
+            </if>
+            <if test="q.toUserId != null">
+                AND e.to_user_id = #{q.toUserId}
+            </if>
+            <if test="q.onlyBad != null and q.onlyBad">
+                AND e.score &lt;= 2
+            </if>
+            <if test="q.status != null">
+                AND e.status = #{q.status}
+            </if>
+
+            <!-- 数据级权限:村级管理员只看本村评价 -->
+            <if test="q.villageIds != null and q.villageIds.size() > 0">
+                AND e.village_id IN
+                <foreach collection="q.villageIds" item="vid" open="(" separator="," close=")">
+                    #{vid}
+                </foreach>
+            </if>
+        </where>
+        ORDER BY e.create_time DESC
+    </select>
+
+    <!--
+      一单一评的"查"这一侧。
+      真正拦住重复提交的是数据库的 uk_order_from 唯一约束,
+      这个方法只是用来给前端回显"你已经评过了"。
+    -->
+    <select id="selectByOrderAndFrom" resultType="com.gjf.village.entity.BizEvaluation">
+        SELECT * FROM biz_evaluation
+        WHERE order_id = #{orderId} AND from_user_id = #{fromUserId}
+        LIMIT 1
+    </select>
+
+</mapper>

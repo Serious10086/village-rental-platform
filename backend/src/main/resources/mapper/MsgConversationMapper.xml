@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  站内信会话查询。
+
+  【这段 SQL 的核心难点】会话表的两方是 user_a_id / user_b_id 两列,
+  "对方是谁""我未读几条"都取决于我是这两列里的哪一个。所以
+  JOIN 条件和 SELECT 出来的字段都要用 CASE WHEN 分流 ——
+
+  这里<b>不能</b>改成"先按我自己过滤出会话,再在 Java 里逐条查对方姓名"。
+  那是典型的 N+1:十个会话就要发十一次查询。会话列表是打开就能看到的
+  页面,这种放大很致命。
+-->
+<mapper namespace="com.gjf.village.mapper.MsgConversationMapper">
+
+    <select id="selectMyConversations" resultType="com.gjf.village.vo.ConversationVO">
+        SELECT
+            c.id                                   AS id,
+            CASE WHEN c.user_a_id = #{userId} THEN c.user_b_id ELSE c.user_a_id END AS peer_id,
+            u.real_name                            AS peer_name,
+            u.avatar                               AS peer_avatar,
+            c.resource_id                          AS resource_id,
+            r.resource_name                        AS resource_title,
+            c.order_id                             AS order_id,
+            o.order_no                             AS order_no,
+            c.last_message                         AS last_message,
+            c.last_time                            AS last_time,
+            CASE WHEN c.user_a_id = #{userId} THEN c.a_unread ELSE c.b_unread END AS unread,
+            c.create_time                          AS create_time
+        FROM msg_conversation c
+        <!-- 对方一定是 user_a 或 user_b 中的一个,所以按这条条件 JOIN 拿到的
+             必然是"另一个人",不需要再判断 -->
+        JOIN sys_user u
+          ON u.id = CASE WHEN c.user_a_id = #{userId} THEN c.user_b_id ELSE c.user_a_id END
+        <!-- 资源可能已被逻辑删除,这里用 LEFT JOIN:资源没了不代表会话该消失,
+             聊天记录本身仍是纠纷处理的依据 -->
+        LEFT JOIN biz_resource r ON r.id = c.resource_id
+        LEFT JOIN biz_order   o ON o.id = c.order_id
+        WHERE c.user_a_id = #{userId} OR c.user_b_id = #{userId}
+        <!-- 没有消息的新会话 last_time 为 NULL,排到最后而不是最前 ——
+             否则刚点开"联系卖家"还没说话的空会话会挤在列表顶上 -->
+        ORDER BY c.last_time IS NULL, c.last_time DESC, c.id DESC
+    </select>
+
+    <!--
+      两个人之间是否已有会话 —— "先查后插"里的那个"查"。
+
+      【resourceId 为空时不能写成 resource_id = NULL】
+      SQL 里 NULL = NULL 的结果是 UNKNOWN 而不是 TRUE,所以
+      `AND resource_id = #{resourceId}` 在参数为 NULL 时永远匹配不到
+      任何行 —— 而"不针对具体资源的纯私聊"正好就是 resource_id 为空那一类。
+      必须用 <choose> 分成 `= ?` 和 `IS NULL` 两条分支。
+
+      这个坑用 MyBatis-Plus 的 LambdaQueryWrapper 也会踩:
+      `.eq(MsgConversation::getResourceId, null)` 恰恰生成的就是
+      `resource_id = NULL`。写出来放在这里,是因为它不会报错,
+      只会在"从用户主页发起私聊、重复点了两次"这条路径上表现为
+      "凭空多出一个空会话"。
+
+      【为什么 user_a_id / user_b_id 直接等值比较,不用 CASE WHEN】
+      因为服务层在建会话时强制把小的 ID 放 a、大的放 b。
+      有了这个不变量,这里才能退化成一个简单的等值查询。
+      反过来,如果建会话时随手 `a = 我, b = 他`,那么 (1,2) 和 (2,1)
+      会成为两条会话,uk_conv 唯一约束形同虚设,这里也要写成
+      `(a=? AND b=?) OR (a=? AND b=?)` —— 那就是在给一个本可以避免的
+      复杂度买单。
+    -->
+    <select id="selectByUsersAndResource"
+            resultType="com.gjf.village.entity.MsgConversation">
+        SELECT * FROM msg_conversation
+        WHERE user_a_id = #{a}
+          AND user_b_id = #{b}
+        <choose>
+            <when test="resourceId != null">
+                AND resource_id = #{resourceId}
+            </when>
+            <otherwise>
+                AND resource_id IS NULL
+            </otherwise>
+        </choose>
+        LIMIT 1
+    </select>
+
+</mapper>

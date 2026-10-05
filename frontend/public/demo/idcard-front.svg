@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 300" width="480" height="300">
+  <!-- 身份证人像面示意图(演示数据用,非真实证件) -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#eef4ff"/>
+      <stop offset="100%" stop-color="#dbeafe"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="480" height="300" fill="url(#bg)"/>
+  <rect x="8" y="8" width="464" height="284" rx="14" fill="none"
+        stroke="#93c5fd" stroke-width="2" stroke-dasharray="10 6"/>
+
+  <!-- 照片区 -->
+  <rect x="330" y="60" width="112" height="140" rx="6" fill="#ffffff" stroke="#bfdbfe" stroke-width="2"/>
+  <circle cx="386" cy="112" r="24" fill="#cbd5e1"/>
+  <path d="M356 176 Q386 140 416 176 Z" fill="#cbd5e1"/>
+  <text x="386" y="216" text-anchor="middle" font-family="PingFang SC, Microsoft YaHei, sans-serif"
+        font-size="11" fill="#94a3b8">照片</text>
+
+  <!-- 字段行 -->
+  <g font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#94a3b8">
+    <text x="36" y="76">姓名</text>
+    <text x="36" y="116">性别</text>
+    <text x="36" y="156">民族</text>
+    <text x="36" y="196">出生</text>
+    <text x="36" y="236">住址</text>
+  </g>
+  <g font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="15" fill="#334155" font-weight="600">
+    <text x="84" y="76">赵 春 梅</text>
+    <text x="84" y="116">女</text>
+    <text x="130" y="116">汉</text>
+    <text x="84" y="156">1980 年 12 月 12 日</text>
+  </g>
+  <g stroke="#cbd5e1" stroke-width="6" stroke-linecap="round">
+    <line x1="84" y1="196" x2="300" y2="196"/>
+    <line x1="84" y1="232" x2="300" y2="232"/>
+    <line x1="84" y1="248" x2="230" y2="248"/>
+  </g>
+
+  <!-- 身份证号 -->
+  <text x="36" y="282" font-family="PingFang SC, Microsoft YaHei, sans-serif"
+        font-size="13" fill="#94a3b8">公民身份号码</text>
+  <text x="140" y="282" font-family="Consolas, monospace"
+        font-size="15" fill="#334155" font-weight="600" letter-spacing="1">
+    510124198012121234</text>
+
+  <!-- 水印,避免被误当成真证件 -->
+  <text x="240" y="160" text-anchor="middle" font-family="PingFang SC, Microsoft YaHei, sans-serif"
+        font-size="34" fill="#93c5fd" fill-opacity="0.35"
+        transform="rotate(-24 240 160)" font-weight="700">示例 · 非真实证件</text>
+</svg>

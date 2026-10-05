@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  资源收藏查询。
+
+  【为什么 FROM biz_resource 而不是视图 v_resource_list】
+  那个视图的定义里写死了 resource_status = 1,是给前台"只看已上架"用的。
+  收藏列表不能沿用它 —— 收藏过的资源下架、售出、被驳回之后,
+  用户仍然应该看得到那条收藏(带一个「已下架」的标记),
+  而不是某天打开发现自己收藏的东西凭空少了几条。
+
+  【为什么用 INNER JOIN 而不是 LEFT JOIN 连 b.release】
+  资源行有逻辑删除(deleted = 1)。被软删的资源理论上还可能被收藏着,
+  但那种情况下收藏已经没有意义(资源再也回不来了),所以这里直接
+  用 INNER JOIN + deleted = 0 把它过滤掉 —— 让收藏列表和"资源还在不在"
+  保持一致,而不是显示一个点不开的卡片。
+-->
+<mapper namespace="com.gjf.village.mapper.BizResourceFavoriteMapper">
+
+    <select id="selectMyFavorites" resultType="com.gjf.village.vo.FavoriteItemVO">
+        SELECT
+            r.id, r.resource_no, r.resource_name, r.cover_url,
+            r.trade_type, r.price, r.price_unit, r.resource_status,
+            r.category_id, r.village_id, r.publisher_id,
+            r.view_count, r.favorite_count, r.create_time,
+            c.category_name,
+            v.village_name,
+            COALESCE(u.real_name,
+                     CONCAT(LEFT(u.phone, 3), '****', RIGHT(u.phone, 4))) AS publisher_name,
+            f.create_time AS favorite_time
+        FROM biz_resource_favorite f
+        JOIN biz_resource r ON r.id = f.resource_id AND r.deleted = 0
+        LEFT JOIN biz_resource_category c ON c.id = r.category_id
+        LEFT JOIN sys_village v ON v.id = r.village_id
+        JOIN sys_user u ON u.id = r.publisher_id
+        WHERE f.user_id = #{userId}
+        <if test="keyword != null and keyword != ''">
+            AND r.resource_name LIKE CONCAT('%', #{keyword}, '%')
+        </if>
+        ORDER BY f.create_time DESC, f.id DESC
+    </select>
+
+</mapper>

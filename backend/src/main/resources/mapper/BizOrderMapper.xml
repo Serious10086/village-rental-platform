@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  订单模块的查询。
+
+  列表和详情都走 v_order_detail 视图。视图里已经联好了资源、买卖双方
+  (sys_user 自连接了两次,别名 b/s)和村组 —— 这些 JOIN 如果每个查询
+  各写一遍,四处都会出错,而且很容易漏掉某个字段。
+-->
+<mapper namespace="com.gjf.village.mapper.BizOrderMapper">
+
+    <!-- ================================================================
+         订单列表
+
+         数据源是 v_order_detail 视图。视图刻意不带 WHERE,
+         所以这里的每一个过滤条件都是「必须的」,不能省:
+         少一个 village_id 条件,村级管理员就能看到别村的订单。
+         ================================================================ -->
+    <select id="selectOrderPage" resultType="com.gjf.village.entity.OrderDetailView">
+        SELECT * FROM v_order_detail
+        <where>
+            <if test="q.orderStatus != null">
+                AND order_status = #{q.orderStatus}
+            </if>
+            <if test="q.orderType != null">
+                AND order_type = #{q.orderType}
+            </if>
+            <if test="q.orderNo != null and q.orderNo != ''">
+                AND order_no LIKE CONCAT('%', #{q.orderNo}, '%')
+            </if>
+
+            <!--
+              买卖双方身份过滤。
+              前台两个列表(我买到的 / 我卖出的)靠它区分,
+              ID 由 Service 强制写入当前登录用户,不接受前端传入。
+            -->
+            <if test="q.buyerId != null">
+                AND buyer_id = #{q.buyerId}
+            </if>
+            <if test="q.sellerId != null">
+                AND seller_id = #{q.sellerId}
+            </if>
+
+            <!-- 数据级权限:村级管理员只能看本村订单 -->
+            <if test="q.villageIds != null and q.villageIds.size() > 0">
+                AND village_id IN
+                <foreach collection="q.villageIds" item="vid" open="(" separator="," close=")">
+                    #{vid}
+                </foreach>
+            </if>
+        </where>
+        ORDER BY create_time DESC
+    </select>
+
+    <!-- ================================================================
+         订单详情
+
+         按主键查视图。可见性校验在 Service 层做 ——
+         视图不带 WHERE,所以这里不能靠视图兜住越权访问。
+         ================================================================ -->
+    <select id="selectOrderDetail" resultType="com.gjf.village.entity.OrderDetailView">
+        SELECT * FROM v_order_detail WHERE id = #{id}
+    </select>
+
+    <!-- ================================================================
+         时段冲突检测
+
+         order_status NOT IN (5, 7) —— 已取消(5)和已拒绝(7)不占用档期。
+         口径定义在 OrderStatusEnum.occupiesSchedule(),两处保持一致。
+
+         走的是 idx_order_resource_time(resource_id, rent_start_date, rent_end_date)
+         索引:先用 resource_id 定位到一个资源的全部订单(通常几十条),
+         再在极小集合上做区间比较。如果只建 (rent_start_date, rent_end_date)
+         的索引,这里就得扫描全表所有订单的租期。
+         ================================================================ -->
+    <select id="countConflictOrders" resultType="int">
+        SELECT COUNT(*)
+        FROM biz_order
+        WHERE resource_id = #{resourceId}
+          AND order_status NOT IN (5, 7)
+          AND rent_start_date &lt;= #{endDate}
+          AND rent_end_date &gt;= #{startDate}
+    </select>
+
+</mapper>

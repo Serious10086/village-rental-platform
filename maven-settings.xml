@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  本项目专用 Maven 配置(不修改全局 ~/.m2/settings.xml)
+
+  作用:
+    1. 本地仓库指向 D 盘 —— C 盘只剩 16G,依赖动辄几百 M,必须挪走
+    2. 阿里云镜像加速 —— 官方中央仓库在国内下载很慢
+
+  使用方式(已在 scripts/mvn.cmd 中自动带上,无需手动指定):
+    mvn -s D:\bishe\claude\maven-settings.xml clean package
+-->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
+                              https://maven.apache.org/xsd/settings-1.0.0.xsd">
+
+    <!-- 本地仓库放在 D 盘,避免撑爆 C 盘 -->
+    <localRepository>D:/bishe/claude/m2repo</localRepository>
+
+    <mirrors>
+        <mirror>
+            <id>aliyun-central</id>
+            <name>阿里云公共仓库</name>
+            <url>https://maven.aliyun.com/repository/public</url>
+            <mirrorOf>central</mirrorOf>
+        </mirror>
+    </mirrors>
+
+    <profiles>
+        <profile>
+            <id>jdk17</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+                <jdk>17</jdk>
+            </activation>
+            <properties>
+                <maven.compiler.source>17</maven.compiler.source>
+                <maven.compiler.target>17</maven.compiler.target>
+                <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+                <!-- 本机 Maven 平台编码是 GBK,不强制 UTF-8 的话中文日志和测试输出会乱码 -->
+                <file.encoding>UTF-8</file.encoding>
+            </properties>
+        </profile>
+    </profiles>
+
+</settings>

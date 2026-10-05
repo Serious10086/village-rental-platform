@@ -1,0 +1,109 @@
+/* ============================================================================
+   设计令牌(Design Tokens)
+
+   全站的颜色、字号、间距、圆角、动效都从这里取值,组件里不写死具体数值。
+   好处:换配色只需要改这一个文件,不会漏掉某处硬编码的颜色。
+
+   视觉方向:现代科技蓝 · 干净利落
+     —— 主色用有信任感的中蓝,背景大面积留白,靠层次和留白建立秩序,
+        而不是靠堆阴影和渐变。信息密度偏高,但用字号对比拉开主次。
+   ============================================================================ */
+
+:root {
+  /* ── 主色:科技蓝 ────────────────────────────────────────── */
+  --color-primary:        #2563eb;   /* 主色,用于主要按钮、链接、选中态 */
+  --color-primary-hover:  #1d4ed8;   /* 悬停加深 */
+  --color-primary-active: #1e40af;   /* 按下再加深 */
+  --color-primary-light:  #eff6ff;   /* 极浅底,用于选中行、标签底 */
+  --color-primary-border: #bfdbfe;   /* 主色系的边框 */
+
+  /* ── 语义色 ──────────────────────────────────────────────── */
+  /* 用语义命名而不是红/绿/黄,组件里写 var(--color-danger) 比写 red 更明确 */
+  --color-success:        #059669;
+  --color-success-light:  #ecfdf5;
+  --color-warning:        #d97706;
+  --color-warning-light:  #fffbeb;
+  --color-danger:         #dc2626;
+  --color-danger-light:   #fef2f2;
+  --color-info:           #64748b;
+  --color-info-light:     #f8fafc;
+
+  /* ── 中性色(文字与边框) ─────────────────────────────────── */
+  --color-text-primary:   #0f172a;   /* 标题、正文主色 */
+  --color-text-regular:   #334155;   /* 次级正文 */
+  --color-text-secondary: #64748b;   /* 辅助说明、表头 */
+  --color-text-placeholder: #94a3b8; /* 占位符 */
+  --color-text-disabled:  #cbd5e1;
+
+  --color-border:         #e2e8f0;   /* 常规边框 */
+  --color-border-light:   #f1f5f9;   /* 更浅的分隔线 */
+  --color-bg-page:        #f8fafc;   /* 页面底色,带一点蓝的灰 */
+  --color-bg-card:        #ffffff;   /* 卡片/面板底色 */
+
+  /* ── 空间尺度 ────────────────────────────────────────────── */
+  --space-xs:  4px;
+  --space-sm:  8px;
+  --space-md:  16px;
+  --space-lg:  24px;
+  --space-xl:  32px;
+  --space-2xl: 48px;
+
+  /* ── 圆角 ────────────────────────────────────────────────── */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-full: 999px;
+
+  /* ── 阴影 ────────────────────────────────────────────────── */
+  /* 用带蓝调的阴影而不是纯黑,和主色更协调 */
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 12px 28px rgba(15, 23, 42, 0.12);
+
+  /* ── 字体 ────────────────────────────────────────────────── */
+  --font-family-base: "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-family-number: "Inter", "SF Pro Display", -apple-system, sans-serif;
+
+  --font-size-xs: 12px;
+  --font-size-sm: 13px;
+  --font-size-base: 14px;
+  --font-size-md: 16px;
+  --font-size-lg: 20px;
+  --font-size-xl: 24px;
+  --font-size-2xl: 32px;
+
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-bold: 600;
+
+  /* ── 动效 ────────────────────────────────────────────────── */
+  --duration-fast: 150ms;
+  --duration-normal: 250ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ── 布局尺寸 ────────────────────────────────────────────── */
+  --header-height: 60px;
+  --sidebar-width: 220px;
+  --sidebar-width-collapsed: 64px;
+  --content-max-width: 1280px;
+
+  /* ── 覆盖 Element Plus 的主题色 ───────────────────────────────
+     让 Element Plus 组件跟我们自己的主色一致,
+     不用去改它每个组件的样式文件 */
+  --el-color-primary: var(--color-primary);
+  --el-color-primary-light-3: #60a5fa;
+  --el-color-primary-light-5: #93c5fd;
+  --el-color-primary-light-7: #bfdbfe;
+  --el-color-primary-light-8: #dbeafe;
+  --el-color-primary-light-9: var(--color-primary-light);
+  --el-color-primary-dark-2: var(--color-primary-hover);
+
+  --el-color-success: var(--color-success);
+  --el-color-warning: var(--color-warning);
+  --el-color-danger: var(--color-danger);
+  --el-color-error: var(--color-danger);
+  --el-color-info: var(--color-info);
+
+  --el-border-radius-base: var(--radius-md);
+  --el-font-family: var(--font-family-base);
+}

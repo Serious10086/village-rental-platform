@@ -1,0 +1,62 @@
+# ── 后端 ────────────────────────────────────────────────────
+backend/target/
+*.class
+*.jar
+*.war
+!.mvn/wrapper/maven-wrapper.jar
+
+# ── 前端 ────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/*.local
+
+# ── Maven 本地仓库(在项目内,体积很大,绝不要提交) ─────────
+m2repo/
+
+# ── 上传的文件 ──────────────────────────────────────────────
+upload/
+
+# ── 部署(批次 9)──────────────────────────────────────────
+# docker/.env 里有数据库 root 密码和 DeepSeek 密钥,和
+# application-dev.yml 是同一类东西 —— 仓库里留 .env.example 模板。
+docker/.env
+
+# ── IDE ─────────────────────────────────────────────────────
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+!.vscode/extensions.json
+
+# ── 日志与临时文件 ──────────────────────────────────────────
+logs/
+*.log
+*.tmp
+.tmp_docx/
+
+# ── 系统文件 ────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── 安全提醒 ────────────────────────────────────────────────
+# application-dev.yml 含数据库密码和 DeepSeek API Key,已经挡在仓库外。
+# 从批次 7 起真实密钥只写在这一个文件里 ——
+# 靠"上传前记得改"不如靠"根本进不去"。
+# 别人 clone 之后照 application-dev.yml.example 建自己的一份即可。
+backend/src/main/resources/application-dev.yml
+
+# ── 密钥 / 凭据文件 ─────────────────────────────────────────
+# 顺手把"随手在根目录存一个密钥文件"这条路也堵上:
+# DS API KEY.txt 是本地存密钥用的,它没有任何理由进仓库。
+# 注意:本项目目前**还不是 git 仓库**(没有 .git),这些规则要等
+# git init 之后才生效 —— 在那之前,别把带密钥的文件拖进截图或压缩包。
+DS API KEY.txt
+*KEY*.txt
+*.key
+*.pem
+
+# ── 内部工作文档(过程记录,不是技术文档,不进公开仓库)─────────
+docs/毕设实施方案.md

@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  聊天消息查询。
+
+  【按订单取聊天记录 —— 纠纷处理的证据来源】
+  这是本模块存在的主要理由之一。需求里"管理员处理纠纷时调取订单和
+  聊天记录作为依据"这句话,落到代码上就是下面第二个 select:
+  从订单出发,找到这笔交易产生的所有会话,再把消息按时间铺开。
+
+  注意中间的路径是 订单 → 会话 → 消息,而不是 订单 → 消息。
+  因为会话是"一次沟通的容器",同一笔订单可能因为换了联系事项
+  (先谈价格、后来谈交付)产生不止一条会话。直接按订单存消息的话,
+  "这次沟通说了什么"就没法作为一个整体来看了。
+-->
+<mapper namespace="com.gjf.village.mapper.MsgChatMessageMapper">
+
+    <!--
+      会话内的消息。
+
+      【为什么用 LEFT JOIN 而不是 JOIN 取姓名】
+      from_user_id 有物理外键,理论上一定存在。但这里用的是 LEFT JOIN ——
+      万一账号被物理删除(理论上不该发生,但运维脚本会做这种事),
+      消息本身仍然要能显示出来。聊天记录是纠纷证据,
+      不该因为一个 JOIN 不上就让整条证据链断开。
+    -->
+    <select id="selectMessagePage" resultType="com.gjf.village.vo.ChatMessageVO">
+        SELECT
+            m.id,
+            m.conversation_id,
+            m.from_user_id,
+            m.to_user_id,
+            m.content,
+            m.msg_type,
+            m.is_read,
+            m.is_filtered,
+            m.create_time
+        FROM msg_chat_message m
+        <where>
+            <if test="q.conversationId != null">
+                AND m.conversation_id = #{q.conversationId}
+            </if>
+            <if test="q.orderId != null">
+                AND m.conversation_id IN (
+                    SELECT c.id FROM msg_conversation c WHERE c.order_id = #{q.orderId}
+                )
+            </if>
+        </where>
+        <!-- 正序:聊天记录要按发生顺序读。外层的分页插件会把
+             "第 1 页"理解成最早的一批,所以调用方从最后一页往回翻 -->
+        ORDER BY m.id ASC
+    </select>
+
+</mapper>

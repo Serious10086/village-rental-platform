@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  推荐候选集查询。
+
+  【热度分的口径,以及它为什么和行为权重是同一套】
+      heat_score = view_count + favorite_count * 3 + order_count * 5
+
+  三个权重(浏览 1 / 收藏 3 / 下单 5)和 AiUserBehaviorMapper 里那张
+  行为权重表**是同一套数字**。这不是巧合:两处回答的是同一个问题 ——
+  "什么行为更能说明这个资源值得看"。同一套口径写成两个不同的比例,
+  会导致"用户偏好算出来的排序"和"热度排序"互相矛盾:
+  按偏好该推的东西,热度分却把它排到后面。宁可两处都写一遍、
+  并在注释里互相指认,也不要让它们悄悄漂开。
+
+  为什么浏览权重最低:浏览量最容易虚高 —— 误点、刷新、爬虫都算。
+  一个被反复观看但从没人收藏的资源,大概率是标题党。
+  反过来,下单数是花钱投的票,它最贵。
+
+  【为什么用累计计数器而不是"近 N 天的行为"】
+  累计计数器(view_count / favorite_count / order_count)是现成的列,
+  而且有索引,排序几乎零成本。按时间窗算热度需要每次都对
+  ai_user_behavior 做 GROUP BY + JOIN,首页每次刷新都跑一遍,
+  代价和收益不成比例。
+  代价是热度对"最近"不敏感:一个半年前爆火、现在没人看的资源,
+  热度分仍然高。好消息是推荐位被内容推荐占了大部分位置,
+  纯热度只用于村组热度和冷启动兜底 —— 那两处"稳一点"本来也没坏处。
+-->
+<mapper namespace="com.gjf.village.mapper.RecommendMapper">
+
+    <!-- 候选集共用的列与热度分 -->
+    <sql id="candidateColumns">
+        r.id, r.resource_no, r.resource_name, r.cover_url,
+        r.trade_type, r.price, r.price_unit,
+        r.category_id, r.view_count, r.favorite_count, r.order_count,
+        c.category_name,
+        v.village_name,
+        u.real_name    AS publisher_name,
+        u.avatar       AS publisher_avatar,
+        u.credit_score AS publisher_credit,
+        (r.view_count + r.favorite_count * 3 + r.order_count * 5) AS heat_score
+    </sql>
+
+    <sql id="candidateJoins">
+        FROM biz_resource r
+        LEFT JOIN biz_resource_category c ON c.id = r.category_id
+        LEFT JOIN sys_village v ON v.id = r.village_id
+        LEFT JOIN sys_user u ON u.id = r.publisher_id
+    </sql>
+
+    <!--
+      候选集的固定条件 + 两个可选的排除规则。
+
+      "不推自己的"恒开(推给你自己发布的东西没有意义);
+      "不推看过的"由 excludeViewed 控制 —— 首页猜你喜欢要开,
+      详情页相似资源要关(理由见 Mapper 接口的注释)。
+
+      "没上架的"恒开:biz_resource 里 resource_status != 1 的有待审核、
+      已下架、交易中、已售出,点进去发现"这东西不能租"比不推更糟。
+    -->
+    <sql id="candidateFilters">
+        WHERE r.deleted = 0
+          AND r.resource_status = 1
+          <if test="excludeUserId != null">
+              AND r.publisher_id &lt;&gt; #{excludeUserId}
+          </if>
+          <if test="excludeViewed and excludeUserId != null">
+              AND NOT EXISTS (
+                  SELECT 1 FROM ai_user_behavior b
+                  WHERE b.user_id = #{excludeUserId}
+                    AND b.resource_id = r.id
+                    AND b.behavior_type = 1
+              )
+          </if>
+    </sql>
+
+    <select id="selectByCategories" resultType="com.gjf.village.vo.RecommendItemVO">
+        SELECT <include refid="candidateColumns"/>
+        <include refid="candidateJoins"/>
+        <include refid="candidateFilters"/>
+          AND r.category_id IN
+          <foreach collection="categoryIds" item="cid" open="(" separator="," close=")">
+              #{cid}
+          </foreach>
+        <!--
+          本村的排前面。写成布尔表达式而不是过滤条件,是为了"本村优先"
+          而不是"只要本村" —— 凑不够数时自然会带上邻村的。
+          villageId 为 null(用户没绑村组)时这个表达式恒为 false,
+          等于不排序,顺序完全由热度决定。
+        -->
+        ORDER BY (r.village_id = #{villageId}) DESC, heat_score DESC, r.id DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectHot" resultType="com.gjf.village.vo.RecommendItemVO">
+        SELECT <include refid="candidateColumns"/>
+        <include refid="candidateJoins"/>
+        <include refid="candidateFilters"/>
+        <!-- villageId 有值就是"本村热门",为 null 就是"全平台热门"(冷启动兜底) -->
+        <if test="villageId != null">
+            AND r.village_id = #{villageId}
+        </if>
+        ORDER BY heat_score DESC, r.id DESC
+        LIMIT #{limit}
+    </select>
+
+</mapper>

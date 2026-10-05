@@ -1,0 +1,27 @@
+{
+  "name": "village-rental-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "乡村闲置资源租售平台 - 前端",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.2",
+    "axios": "^1.20.0",
+    "echarts": "^6.1.0",
+    "element-plus": "^2.14.5",
+    "pinia": "^4.0.3",
+    "vue": "^3.5.42",
+    "vue-router": "^5.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.9",
+    "playwright": "^1.63.0",
+    "sass": "^1.104.1",
+    "vite": "^8.3.0"
+  }
+}
